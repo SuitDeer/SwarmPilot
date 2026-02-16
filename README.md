@@ -25,6 +25,7 @@ SwarmPilot helps you to deploy a high available docker swarm cluster form 1 to 1
 - You need ssh access on all nodes
 - Need root access on all nodes
 - You need an additional unused IP-Address for keepalived (virtual IP-Address of the docker swarm cluster)
+- `sshpass` must be installed on all nodes: `sudo apt install sshpass`
 
 ## Quick Start
 

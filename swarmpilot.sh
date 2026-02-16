@@ -46,12 +46,11 @@ display_banner() {
 get_valid_input() {
     local prompt="$1"
     local validator="$2"
-    local input
 
     while true; do
-        read -p "$prompt" input
+        read -p "$prompt"
         if eval "$validator"; then
-            echo "$input"
+            echo "$REPLY"
             return
         fi
     done
@@ -60,7 +59,7 @@ get_valid_input() {
 # Function to validate node count
 validate_node_count() {
     local count="$1"
-    [[ "$count" =~ ^[1-9][0-9]*$ ]] && [[ "$count" -le 10 ]]
+    [[ "$count" =~ ^[1-9]$ ]] && [[ "$count" -lt 10 ]]
 }
 
 # Function to validate IP address
@@ -195,7 +194,7 @@ install_keepalived() {
             return 1
         fi
     else
-        if ! echo "$config_content" | echo "$password" | sshpass -p "$password" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "sudo tee /etc/keepalived/keepalived.conf > /dev/null"; then
+        if ! echo "$config_content" | sshpass -p "$password" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "sudo tee /etc/keepalived/keepalived.conf > /dev/null"; then
             log_error "Failed to write keepalived configuration on node $node_name"
             return 1
         fi
@@ -473,7 +472,7 @@ main() {
     display_banner
 
     ###### Step 1: Get number of nodes
-    log_info "How many nodes should the cluster have? (1-10, including this node)"
+    log_info "How many nodes should the cluster have? (1-9, including this node)"
     NODE_COUNT=$(get_valid_input "Enter number of nodes: " "validate_node_count \$REPLY")
 
     ###### Step 2: Get node information
@@ -726,24 +725,23 @@ main() {
     log_info "Checking syncthing container health on all nodes..."
     local all_healthy=false
 
-    while ! all_healthy; do
+    while true; do
         sleep 3
-        # Check local node
-        if check_syncthing_health "localhost" "$USER" "" "Local Node" true; then
-            all_healthy=true
+        local all_pass=true
+        if ! check_syncthing_health "localhost" "$USER" "" "Local Node" true; then
+            all_pass=false
         fi
-
-        # Check remote nodes
         for i in "${!NODES[@]}"; do
             IFS=':' read -r NODE_IP NODE_USERNAME NODE_PASSWORD <<< "${NODES[$i]}"
             NODE_NAME="${NODE_NAMES[$i]}"
-
-            if check_syncthing_health "$NODE_IP" "$NODE_USERNAME" "$NODE_PASSWORD" "$NODE_NAME" false; then
-                all_healthy=true
+            if ! check_syncthing_health "$NODE_IP" "$NODE_USERNAME" "$NODE_PASSWORD" "$NODE_NAME" false; then
+                all_pass=false
             fi
-
-            echo "Not all syncthing containers are healthy yet..."
         done
+        if [ "$all_pass" = true ]; then
+            break
+        fi
+        echo "Not all syncthing containers are healthy yet..."
     done
 
     echo ""
