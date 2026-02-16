@@ -102,7 +102,7 @@ remote_exec_sudo() {
     local quoted_command
 
     printf -v quoted_command '%q' "$command"
-    printf '%s\n' "$password" | sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "sudo -S -p '' bash -lc $quoted_command"
+    printf '%s\n' "$password" | sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "sudo -S -p '' bash -lc $quoted_command"
 }
 
 # Function to execute remote sudo command with additional stdin payload
@@ -118,7 +118,7 @@ remote_exec_sudo_with_stdin() {
     {
         printf '%s\n' "$password"
         printf '%s' "$stdin_payload"
-    } | sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "sudo -S -p '' bash -lc $quoted_command"
+    } | sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "sudo -S -p '' bash -lc $quoted_command"
 }
 
 # Function to detect network interface
@@ -166,7 +166,7 @@ install_keepalived() {
     fi
 
     # Install keepalived
-    local install_cmd="sudo apt -q=3 update && sudo apt install -y -q=3 keepalived"
+    local install_cmd="sudo apt -q update > /dev/null 2>&1 && sudo apt install -y -q keepalived > /dev/null 2>&1"
     if [ "$is_local" = true ]; then
         if ! eval "$install_cmd"; then
             log_error "Failed to install keepalived on local node"
@@ -442,8 +442,8 @@ install_docker() {
 
     # Docker installation commands
     local docker_commands=(
-        "sudo apt -q=3 update "
-        "sudo apt install -y -q=3 ca-certificates curl"
+        "sudo apt -q update > /dev/null 2>&1"
+        "sudo apt install -y -q ca-certificates curl > /dev/null 2>&1"
         "sudo install -m 0755 -d /etc/apt/keyrings"
         "sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc"
         "sudo chmod a+r /etc/apt/keyrings/docker.asc"
@@ -454,8 +454,8 @@ Suites: \$(. /etc/os-release && echo "\${UBUNTU_CODENAME:-\$VERSION_CODENAME}")
 Components: stable
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF"
-        "sudo apt -q=3 update"
-        "sudo apt install -y -q=3 docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
+        "sudo apt -q update > /dev/null 2>&1"
+        "sudo apt install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin > /dev/null 2>&1"
         "sudo systemctl enable docker"
         "sudo systemctl start docker"
     )
@@ -584,7 +584,41 @@ main() {
         echo ""
     done
 
-    ###### Step 5: Configure keepalived
+    ###### Step 5: Initialize Docker Swarm
+    echo ""
+    log_info "Initializing Docker Swarm cluster..."
+    echo ""
+
+    local SWARM_LOCAL_IP
+    local SWARM_MANAGER_TOKEN
+    SWARM_LOCAL_IP=$(get_valid_input "Enter local node IP address for swarm advertise-addr: " "validate_ip \$REPLY")
+
+    if ! sudo docker swarm init --advertise-addr "$SWARM_LOCAL_IP"; then
+        log_error "Failed to initialize Docker Swarm on local node"
+        exit 1
+    fi
+
+    SWARM_MANAGER_TOKEN=$(sudo docker swarm join-token manager -q)
+    if [ -z "$SWARM_MANAGER_TOKEN" ]; then
+        log_error "Failed to retrieve swarm manager join token"
+        exit 1
+    fi
+
+    for i in "${!NODES[@]}"; do
+        IFS=':' read -r NODE_IP NODE_USERNAME NODE_PASSWORD <<< "${NODES[$i]}"
+        NODE_NAME="${NODE_NAMES[$i]}"
+
+        if ! remote_exec_sudo "$NODE_IP" "$NODE_USERNAME" "$NODE_PASSWORD" "docker swarm join --token $SWARM_MANAGER_TOKEN $SWARM_LOCAL_IP:2377"; then
+            log_error "Failed to join $NODE_NAME to swarm"
+            exit 1
+        fi
+    done
+
+    echo ""
+    log_success "Docker Swarm initialized and all remote nodes joined"
+    echo ""
+
+    ###### Step 6: Configure keepalived
     if [ "$NODE_COUNT" -gt 1 ]; then
         echo ""
         log_info "Configuring High Availability with Keepalived..."
@@ -639,7 +673,7 @@ main() {
 
 
         # Get local node IP address
-        LOCAL_NODE_IP=$(get_valid_input "Enter local node IP address: " "validate_ip \$REPLY")
+        LOCAL_NODE_IP=$(get_valid_input "Enter local node IP address (this node): " "validate_ip \$REPLY")
 
 
         # Install keepalived on local node
@@ -694,7 +728,7 @@ main() {
         echo ""
     fi
 
-    ###### Step 6: Install syncthing4swarm
+    ###### Step 7: Install syncthing4swarm
     echo ""
     log_info "Configuring syncthing4swarm for file synchronization..."
     echo ""
@@ -742,7 +776,7 @@ main() {
         echo ""
     fi
 
-    ###### Step 7: Install Portainer
+    ###### Step 8: Install Portainer
     echo ""
     log_info "Configuring Portainer for Docker management..."
     echo ""
