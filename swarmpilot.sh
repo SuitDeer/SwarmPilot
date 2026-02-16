@@ -445,6 +445,64 @@ EOF'; then
     return 0
 }
 
+# Function to install Nginx Proxy Manager on local node
+install_nginxproxymanager() {
+    log_info "Installing Nginx Proxy Manager on local node..."
+    
+    # Create directories with error handling
+    if ! sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_data 2>/dev/null; then
+        log_error "Failed to create Nginx Proxy Manager data directory: $npm_data_dir"
+        return 1
+    fi
+    
+    if ! sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_letsencrypt 2>/dev/null; then
+        log_error "Failed to create Nginx Proxy Manager letsencrypt directory: $npm_letsencrypt_dir"
+        return 1
+    fi
+
+    # Create Nginx Proxy Manager docker network
+    if ! sudo docker network create --driver overlay --attachable nginx_ingress; then
+        log_error "Failed to create Nginx Proxy Manager docker network (nginx_ingress)"
+        return 1
+    fi
+
+    # Create nginxproxymanager.yaml configuration file
+    log_info "Creating Nginx Proxy Manager configuration file..."
+    if ! bash -c 'cat <<EOF > ~/nginxproxymanager.yaml
+services:
+  app:
+    image: 'jc21/nginx-proxy-manager:latest'
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '81:81'
+      - '443:443'
+    volumes:
+      - /var/syncthing/data/nginxproxymanager/npm_data:/data
+      - /var/syncthing/data/nginxproxymanager/npm_letsencrypt:/etc/letsencrypt
+    networks:
+      - nginx_ingress
+
+networks:
+  nginx_ingress:
+    external: true
+EOF'; then
+        log_error "Failed to create Nginx Proxy Manager configuration file"
+        return 1
+    fi
+
+    # Deploy Nginx Proxy Manager stack
+    log_info "Deploying Nginx Proxy Manager stack..."
+    if ! sudo docker stack deploy nginxproxymanager -c nginxproxymanager.yaml; then
+        log_error "Failed to deploy Nginx Proxy Manager stack"
+        return 1
+    fi
+
+    log_success "Nginx Proxy Manager successfully deployed on local node"
+    log_info "Nginx Proxy Manager will be accessible at http://<virtual_ip>:81"
+    return 0
+}
+
 # Function to install Docker on a node (local or remote)
 install_docker() {
     local node_ip="$1"
@@ -523,9 +581,13 @@ main() {
     log_info "Enter local node IP address (this node)"
     LOCAL_NODE_IP=$(get_valid_input "Local node IP address: " "validate_ip \$REPLY")
 
+
+
     ###### Step 1: Get number of nodes
     log_info "How many nodes should the cluster have? (1-9, including this node)"
     NODE_COUNT=$(get_valid_input "Enter number of nodes: " "validate_node_count \$REPLY")
+
+
 
     ###### Step 2: Get node information
     NODES=()
@@ -603,6 +665,8 @@ main() {
     log_info "Starting Docker installation..."
     echo ""
 
+
+
     ###### Step 3: Install Docker on local node
     if ! install_docker "localhost" "$USER" "" "Local Node" true; then
         log_error "Failed to install Docker on local node"
@@ -612,6 +676,8 @@ main() {
     echo ""
     log_success "Local node Docker installation completed"
     echo ""
+
+
 
     ###### Step 4: Install Docker on remote nodes
     for i in "${!NODES[@]}"; do
@@ -625,6 +691,8 @@ main() {
 
         echo ""
     done
+
+
 
     ###### Step 5: Initialize Docker Swarm
     echo ""
@@ -657,6 +725,8 @@ main() {
     echo ""
     log_success "Docker Swarm initialized and all remote nodes joined"
     echo ""
+
+
 
     ###### Step 6: Configure keepalived
     if [ "$NODE_COUNT" -gt 1 ]; then
@@ -760,6 +830,8 @@ main() {
         echo ""
     fi
 
+
+
     ###### Step 7: Install syncthing4swarm
     echo ""
     log_info "Configuring syncthing4swarm for file synchronization..."
@@ -807,6 +879,8 @@ main() {
         log_info "Skipping syncthing configuration for single node cluster"
         echo ""
     fi
+
+
 
     ###### Step 8: Install Portainer
     echo ""
@@ -859,7 +933,35 @@ main() {
     log_info "To verify Portainer status, run: docker service ls"
     echo ""
 
-    # Final summary
+
+
+    ###### Step 9: Install Nginx Proxy Manager
+    echo ""
+    log_info "Configuring Nginx Proxy Manager for reverse proxy in cluster..."
+    echo ""
+    sleep 3
+    echo ""
+    log_info "Starting Nginx Proxy Manager installation..."
+    echo ""
+
+    # Install Nginx Proxy Manager on local node
+    if ! install_nginxproxymanager; then
+        log_error "Failed to install Nginx Proxy Manager on local node"
+        exit 1
+    fi
+
+    echo ""
+    log_success "=========================================="
+    log_success "Nginx Proxy Manager Installation Completed!"
+    log_success "=========================================="
+    echo ""
+    log_info "Nginx Proxy Manager is now accessible at http://<virtual_ip>:81"
+    log_info "To verify Nginx Proxy Manager status, run: docker service ls"
+    echo ""
+
+
+
+    ###### Final summary
     echo ""
     log_success "=========================================="
     log_success "Docker Cluster Setup Completed Successfully!"
