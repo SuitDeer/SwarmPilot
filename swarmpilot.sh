@@ -191,7 +191,7 @@ install_keepalived() {
     fi
 
     # Install keepalived
-    local install_cmd="sudo apt -q update > /dev/null 2>&1 && sudo apt install -y -q keepalived > /dev/null 2>&1"
+    local install_cmd="sudo apt -q update >/dev/null 2>&1 && sudo apt install -y -q keepalived >/dev/null 2>&1"
     if [ "$is_local" = true ]; then
         if ! eval "$install_cmd"; then
             log_error "Failed to install keepalived on local node"
@@ -243,19 +243,19 @@ install_keepalived() {
 
     # Write configuration
     if [ "$is_local" = true ]; then
-        if ! echo "$config_content" | sudo tee /etc/keepalived/keepalived.conf > /dev/null; then
+        if ! echo "$config_content" | sudo tee /etc/keepalived/keepalived.conf >/dev/null 2>&1; then
             log_error "Failed to write keepalived configuration on local node"
             return 1
         fi
     else
-        if ! remote_exec_sudo_with_stdin "$node_ip" "$username" "$password" "tee /etc/keepalived/keepalived.conf > /dev/null" "$config_content"; then
+        if ! remote_exec_sudo_with_stdin "$node_ip" "$username" "$password" "tee /etc/keepalived/keepalived.conf >/dev/null 2>&1" "$config_content"; then
             log_error "Failed to write keepalived configuration on node $node_name"
             return 1
         fi
     fi
 
     # Enable and start keepalived
-    local enable_cmd="sudo systemctl enable keepalived && sudo systemctl start keepalived"
+    local enable_cmd="sudo systemctl enable keepalived >/dev/null 2>&1 && sudo systemctl start keepalived >/dev/null 2>&1"
     if [ "$is_local" = true ]; then
         if ! eval "$enable_cmd"; then
             log_error "Failed to enable keepalived on local node"
@@ -304,24 +304,41 @@ install_syncthing4swarm() {
         fi
     fi
 
+    sleep 3
+
     # On local node only: clone repository and deploy docker stack
     if [ "$is_local" = true ]; then
-        log_info "Cloning syncthing4swarm repository..."
 
-        # Check if directory already exists
-        if [ -d "syncthing4swarm" ]; then
-            log_warning "syncthing4swarm directory already exists. Skipping clone."
-        else
-            if ! git clone https://github.com/SuitDeer/syncthing4swarm.git; then
-                log_error "Failed to clone syncthing4swarm repository"
-                return 1
-            fi
+        # Create syncthing4swarm.yaml configuration file
+        log_info "Creating syncthing4swarm configuration file..."
+        if ! bash -c 'cat <<EOF > syncthing4swarm.yaml
+networks:
+  syncthing4swarm:
+    driver: overlay
+    internal: true
+
+services:
+  syncthing4swarm:
+    image: suitdeer/syncthing4swarm:latest
+    volumes:
+      - /var/syncthing/data:/var/syncthing/data
+    deploy:
+      mode: global
+    environment:
+      - STGUIAPIKEY=A1B2C3 # CHANGE ME
+      - SYNCTHING_PORT=8384
+      - SYNCTHING_FOLDER_PATH=/var/syncthing/data
+      - PUID=0
+      - PGID=0
+    networks:
+      - syncthing4swarm
+EOF'; then
+            log_error "Failed to create syncthing4swarm configuration file"
+            return 1
         fi
 
-        cd syncthing4swarm
-
         log_info "Deploying syncthing4swarm with Docker Stack..."
-        if ! sudo docker stack deploy -c docker-compose.yml syncthing4swarm; then
+        if ! sudo docker stack deploy -c syncthing4swarm.yaml syncthing4swarm >/dev/null 2>&1; then
             log_error "Failed to deploy syncthing4swarm stack"
             cd ..
             return 1
@@ -435,7 +452,7 @@ EOF'; then
 
     # Deploy portainer stack
     log_info "Deploying Portainer stack..."
-    if ! sudo docker stack deploy portainer -c portainer.yaml; then
+    if ! sudo docker stack deploy -c portainer.yaml portainer >/dev/null 2>&1; then
         log_error "Failed to deploy portainer stack"
         return 1
     fi
@@ -449,12 +466,12 @@ install_nginxproxymanager() {
     log_info "Installing Nginx Proxy Manager on local node..."
     
     # Create directories with error handling
-    if ! sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_data > /dev/null; then
+    if ! sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_data >/dev/null 2>&1; then
         log_error "Failed to create Nginx Proxy Manager data directory: $npm_data_dir"
         return 1
     fi
     
-    if ! sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_letsencrypt > /dev/null; then
+    if ! sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_letsencrypt >/dev/null 2>&1; then
         log_error "Failed to create Nginx Proxy Manager letsencrypt directory: $npm_letsencrypt_dir"
         return 1
     fi
@@ -492,7 +509,7 @@ EOF'; then
 
     # Deploy Nginx Proxy Manager stack
     log_info "Deploying Nginx Proxy Manager stack..."
-    if ! sudo docker stack deploy nginxproxymanager -c nginxproxymanager.yaml; then
+    if ! sudo docker stack deploy -c nginxproxymanager.yaml nginxproxymanager; then
         log_error "Failed to deploy Nginx Proxy Manager stack"
         return 1
     fi
@@ -552,12 +569,12 @@ EOF"
 
     # Test Docker installation
     if [ "$is_local" = true ]; then
-        if ! sudo docker run --rm hello-world > /dev/null; then
+        if ! sudo docker run --rm hello-world > /dev/null 2>&1; then
             log_warning "Docker installation may have issues"
             return 1
         fi
     else
-        if ! remote_exec_sudo "$node_ip" "$username" "$password" "sudo docker run --rm hello-world > /dev/null"; then
+        if ! remote_exec_sudo "$node_ip" "$username" "$password" "sudo docker run --rm hello-world > /dev/null 2>&1"; then
             log_warning "Docker installation may have issues on node $node_name"
             return 1
         fi
@@ -579,15 +596,9 @@ main() {
     log_info "Enter local node IP address (this node)"
     LOCAL_NODE_IP=$(get_valid_input "Local node IP address: " "validate_ip \$REPLY")
 
-
-
-    ###### Step 1: Get number of nodes
     log_info "How many nodes should the cluster have? (1-9, including this node)"
     NODE_COUNT=$(get_valid_input "Enter number of nodes: " "validate_node_count \$REPLY")
 
-
-
-    ###### Step 2: Get node information
     NODES=()
     NODE_NAMES=()
 
@@ -622,7 +633,6 @@ main() {
         done
     fi
 
-    # Display configuration summary
     echo ""
     log_info "Configuration Summary:"
     echo "----------------------"
@@ -640,10 +650,13 @@ main() {
         exit 0
     fi
 
-    echo ""
-    log_info "Running pre-flight checks..."
-    echo ""
 
+
+    echo ""
+    log_info "=========================================="
+    log_info "Step 2: Running pre-flight checks..."
+    log_info "=========================================="
+    echo ""
     if ! check_sshpass_installed "localhost" "$USER" "" "Local Node" true; then
         log_error "Please install sshpass on local node: sudo apt install -y sshpass"
         exit 1
@@ -658,22 +671,24 @@ main() {
             exit 1
         fi
     done
+    echo ""
+    log_success "=========================================="
+    log_success "Step 2: Pre-flight checks completed!"
+    log_success "=========================================="
+    echo ""
+
+
 
     echo ""
-    log_info "Starting Docker installation..."
+    log_info "=========================================="
+    log_info "Step 3: Starting Docker installation..."
+    log_info "=========================================="
     echo ""
-
-
-
-    ###### Step 3: Install Docker on local node
     if ! install_docker "localhost" "$USER" "" "Local Node" true; then
         log_error "Failed to install Docker on local node"
         exit 1
     fi
 
-
-
-    ###### Step 4: Install Docker on remote nodes
     for i in "${!NODES[@]}"; do
         IFS=':' read -r NODE_IP NODE_USERNAME NODE_PASSWORD <<< "${NODES[$i]}"
         NODE_NAME="${NODE_NAMES[$i]}"
@@ -685,23 +700,21 @@ main() {
 
         echo ""
     done
-
     echo ""
     log_success "=========================================="
-    log_success "Docker installation Completed!"
+    log_success "Step 3: Docker installation completed!"
     log_success "=========================================="
     echo ""
 
 
 
-    ###### Step 5: Initialize Docker Swarm
     echo ""
-    log_info "Initializing Docker Swarm cluster..."
+    log_info "=========================================="
+    log_info "Step 4: Initializing Docker Swarm cluster..."
+    log_info "=========================================="
     echo ""
-
     local SWARM_MANAGER_TOKEN
-
-    if ! sudo docker swarm init --advertise-addr "$LOCAL_NODE_IP" >/dev/null; then
+    if ! sudo docker swarm init --advertise-addr "$LOCAL_NODE_IP" >/dev/null 2>&1; then
         log_error "Failed to initialize Docker Swarm on local node"
         exit 1
     fi
@@ -721,20 +734,20 @@ main() {
             exit 1
         fi
     done
-
     echo ""
-    log_success "Docker Swarm initialized and all remote nodes joined"
+    log_success "=========================================="
+    log_success "Step 4: Docker Swarm initialization completed!"
+    log_success "=========================================="
     echo ""
 
 
 
-    ###### Step 6: Configure keepalived
     if [ "$NODE_COUNT" -gt 1 ]; then
         echo ""
-        log_info "Configuring High Availability with Keepalived..."
+        log_info "=========================================="
+        log_info "Step 5: Configuring High Availability with Keepalived..."
+        log_info "=========================================="
         echo ""
-        sleep 3
-
         # Get virtual IP address
         VIRTUAL_IP=$(get_valid_input "Enter virtual IP address for the cluster: " "validate_ip \$REPLY")
 
@@ -788,10 +801,6 @@ main() {
             exit 1
         fi
 
-        echo ""
-        log_success "Local node keepalived installation completed"
-        echo ""
-
         # Install keepalived on remote nodes
         for i in "${!NODES[@]}"; do
             IFS=':' read -r NODE_IP NODE_USERNAME NODE_PASSWORD <<< "${NODES[$i]}"
@@ -814,15 +823,10 @@ main() {
 
             echo ""
         done
-
         echo ""
         log_success "=========================================="
-        log_success "Keepalived Configuration Completed!"
+        log_success "Step 5: Keepalived Configuration completed!"
         log_success "=========================================="
-        echo ""
-        log_info "High availability is now configured."
-        log_info "The virtual IP $VIRTUAL_IP will float between nodes."
-        log_info "To verify keepalived status, run: sudo systemctl status keepalived"
         echo ""
     else
         echo ""
@@ -832,26 +836,18 @@ main() {
 
 
 
-    ###### Step 7: Install syncthing4swarm
-    echo ""
-    log_info "Configuring syncthing4swarm for file synchronization..."
-    echo ""
-    sleep 3
 
     if [ "$NODE_COUNT" -gt 1 ]; then
         echo ""
-        log_info "Starting syncthing4swarm installation..."
+        log_info "=========================================="
+        log_info "Step 6: Configuring syncthing4swarm for file synchronization..."
+        log_info "=========================================="
         echo ""
-
         # Install syncthing4swarm on local node
         if ! install_syncthing4swarm "localhost" "$USER" "" "Local Node" true; then
             log_error "Failed to install syncthing4swarm on local node"
             exit 1
         fi
-
-        echo ""
-        log_success "Local node syncthing4swarm installation completed"
-        echo ""
 
         # Install syncthing4swarm on remote nodes
         for i in "${!NODES[@]}"; do
@@ -865,14 +861,10 @@ main() {
 
             echo ""
         done
-
         echo ""
         log_success "=========================================="
-        log_success "syncthing4swarm Installation Completed!"
+        log_success "Step 6: syncthing4swarm Installation Completed!"
         log_success "=========================================="
-        echo ""
-        log_info "File synchronization is now configured across all nodes."
-        log_info "To verify syncthing4swarm status, run: docker service ls"
         echo ""
     else
         echo ""
@@ -882,15 +874,11 @@ main() {
 
 
 
-    ###### Step 8: Install Portainer
     echo ""
-    log_info "Configuring Portainer for Docker management..."
+    log_info "=========================================="
+    log_info "Step 7: Starting Portainer installation..."
+    log_info "=========================================="
     echo ""
-    sleep 3
-    echo ""
-    log_info "Starting Portainer installation..."
-    echo ""
-
     # Check syncthing container health on all nodes
     log_info "Checking syncthing container health on all nodes..."
     local all_healthy=false
@@ -923,40 +911,32 @@ main() {
         log_error "Failed to install Portainer on local node"
         exit 1
     fi
-
     echo ""
     log_success "=========================================="
-    log_success "Portainer Installation Completed!"
+    log_success "Step 7: Portainer Installation Completed!"
+    log_success "        Web interface accessible at"
+    log_success "        https://<virtual_ip>:9443"
     log_success "=========================================="
     echo ""
-    log_info "Portainer is now accessible at https://<virtual_ip>:9443"
-    log_info "To verify Portainer status, run: docker service ls"
-    echo ""
 
 
 
-    ###### Step 9: Install Nginx Proxy Manager
     echo ""
-    log_info "Configuring Nginx Proxy Manager for reverse proxy in cluster..."
+    log_info "=========================================="
+    log_info "Step 8: Starting Nginx Proxy Manager installation..."
+    log_info "=========================================="
     echo ""
-    sleep 3
-    echo ""
-    log_info "Starting Nginx Proxy Manager installation..."
-    echo ""
-
     # Install Nginx Proxy Manager on local node
     if ! install_nginxproxymanager; then
         log_error "Failed to install Nginx Proxy Manager on local node"
         exit 1
     fi
-
     echo ""
     log_success "=========================================="
-    log_success "Nginx Proxy Manager Installation Completed!"
+    log_success "Step 8: Nginx Proxy Manager Installation Completed!"
+    log_success "        Web interface accessible at"
+    log_success "        http://<virtual_ip>:81"
     log_success "=========================================="
-    echo ""
-    log_info "Nginx Proxy Manager is now accessible at http://<virtual_ip>:81"
-    log_info "To verify Nginx Proxy Manager status, run: docker service ls"
     echo ""
 
 
@@ -966,11 +946,6 @@ main() {
     log_success "=========================================="
     log_success "Docker Cluster Setup Completed Successfully!"
     log_success "=========================================="
-    echo ""
-    log_info "All nodes have Docker installed and running."
-    log_info "You can now configure Docker Swarm or other Docker services."
-    echo ""
-    log_info "To verify Docker installation, run: docker version"
     echo ""
 }
 
