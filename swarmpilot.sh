@@ -88,9 +88,37 @@ validate_password() {
 get_password() {
     local prompt="$1"
     local password
-    read -s -p "$prompt" password
-    echo
-    echo "$password"
+    read -r -s -p "$prompt" password
+    echo >&2
+    printf '%s\n' "$password"
+}
+
+# Function to execute command on remote node with sudo (non-interactive)
+remote_exec_sudo() {
+    local node_ip="$1"
+    local username="$2"
+    local password="$3"
+    local command="$4"
+    local quoted_command
+
+    printf -v quoted_command '%q' "$command"
+    printf '%s\n' "$password" | sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "sudo -S -p '' bash -lc $quoted_command"
+}
+
+# Function to execute remote sudo command with additional stdin payload
+remote_exec_sudo_with_stdin() {
+    local node_ip="$1"
+    local username="$2"
+    local password="$3"
+    local command="$4"
+    local stdin_payload="$5"
+    local quoted_command
+
+    printf -v quoted_command '%q' "$command"
+    {
+        printf '%s\n' "$password"
+        printf '%s' "$stdin_payload"
+    } | sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "sudo -S -p '' bash -lc $quoted_command"
 }
 
 # Function to detect network interface
@@ -110,7 +138,8 @@ detect_network_interface() {
         echo "$interface_name"
     else
         # Detect interface on remote node
-        local interface_name=$(sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "ip -br addr show | grep '$node_ip' | awk '{print $1}'")
+        local interface_name
+        interface_name=$(remote_exec_sudo "$node_ip" "$username" "$password" "ip -br addr show | grep '$node_ip' | awk '{print \$1}'")
         if [ -z "$interface_name" ]; then
             log_error "Could not detect network interface on node $node_ip"
             return 1
@@ -133,18 +162,18 @@ install_keepalived() {
     if [ "$is_local" = true ]; then
         log_info "Installing and configuring keepalived on local node..."
     else
-        log_info "Installing and configuring keepalived on node $node_name ($node_ip)..."
+        log_info "Installing and configuring keepalived on node $node_name..."
     fi
 
     # Install keepalived
-    local install_cmd="sudo apt update && sudo apt install -y keepalived"
+    local install_cmd="sudo apt -q=3 update && sudo apt install -y -q=3 keepalived"
     if [ "$is_local" = true ]; then
         if ! eval "$install_cmd"; then
             log_error "Failed to install keepalived on local node"
             return 1
         fi
     else
-        if ! sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "$install_cmd"; then
+        if ! remote_exec_sudo "$node_ip" "$username" "$password" "$install_cmd"; then
             log_error "Failed to install keepalived on node $node_name"
             return 1
         fi
@@ -194,7 +223,7 @@ install_keepalived() {
             return 1
         fi
     else
-        if ! echo "$config_content" | sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "sudo tee /etc/keepalived/keepalived.conf > /dev/null"; then
+        if ! remote_exec_sudo_with_stdin "$node_ip" "$username" "$password" "tee /etc/keepalived/keepalived.conf > /dev/null" "$config_content"; then
             log_error "Failed to write keepalived configuration on node $node_name"
             return 1
         fi
@@ -208,7 +237,7 @@ install_keepalived() {
             return 1
         fi
     else
-        if ! sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "$enable_cmd"; then
+        if ! remote_exec_sudo "$node_ip" "$username" "$password" "$enable_cmd"; then
             log_error "Failed to enable keepalived on node $node_name"
             return 1
         fi
@@ -233,7 +262,7 @@ install_syncthing4swarm() {
     if [ "$is_local" = true ]; then
         log_info "Installing syncthing4swarm on local node..."
     else
-        log_info "Installing syncthing4swarm on node $node_name ($node_ip)..."
+        log_info "Installing syncthing4swarm on node $node_name..."
     fi
 
     # Create /var/syncthing/data directory on all nodes
@@ -244,7 +273,7 @@ install_syncthing4swarm() {
             return 1
         fi
     else
-        if ! sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "$create_dir_cmd"; then
+        if ! remote_exec_sudo "$node_ip" "$username" "$password" "$create_dir_cmd"; then
             log_error "Failed to create /var/syncthing/data on node $node_name"
             return 1
         fi
@@ -303,7 +332,7 @@ check_syncthing_health() {
     if [ "$is_local" = true ]; then
         container_status=$(eval "$check_cmd")
     else
-        container_status=$(sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "$check_cmd")
+        container_status=$(remote_exec_sudo "$node_ip" "$username" "$password" "$check_cmd")
     fi
 
     if [ -z "$container_status" ]; then
@@ -393,7 +422,7 @@ EOF'; then
     fi
 
     log_success "Portainer successfully deployed on local node"
-    log_info "Portainer will be accessible at https://localhost:9443"
+    log_info "Portainer will be accessible at https://<virtual_ip>:9443"
     return 0
 }
 
@@ -408,13 +437,13 @@ install_docker() {
     if [ "$is_local" = true ]; then
         log_info "Installing Docker on local node..."
     else
-        log_info "Installing Docker on node $node_name ($node_ip)..."
+        log_info "Installing Docker on node $node_name..."
     fi
 
     # Docker installation commands
     local docker_commands=(
-        "sudo apt update"
-        "sudo apt install -y ca-certificates curl"
+        "sudo apt -q=3 update "
+        "sudo apt install -y -q=3 ca-certificates curl"
         "sudo install -m 0755 -d /etc/apt/keyrings"
         "sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc"
         "sudo chmod a+r /etc/apt/keyrings/docker.asc"
@@ -425,8 +454,8 @@ Suites: \$(. /etc/os-release && echo "\${UBUNTU_CODENAME:-\$VERSION_CODENAME}")
 Components: stable
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF"
-        "sudo apt update"
-        "sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
+        "sudo apt -q=3 update"
+        "sudo apt install -y -q=3 docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
         "sudo systemctl enable docker"
         "sudo systemctl start docker"
     )
@@ -439,7 +468,7 @@ EOF"
                 return 1
             fi
         else
-            if ! sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "$cmd"; then
+            if ! remote_exec_sudo "$node_ip" "$username" "$password" "$cmd"; then
                 log_error "Failed to execute command on node $node_name: $cmd"
                 return 1
             fi
@@ -453,7 +482,7 @@ EOF"
             return 1
         fi
     else
-        if ! sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "sudo -u $username docker run --rm hello-world"; then
+        if ! remote_exec_sudo "$node_ip" "$username" "$password" "sudo docker run --rm hello-world"; then
             log_warning "Docker installation may have issues on node $node_name"
             return 1
         fi
