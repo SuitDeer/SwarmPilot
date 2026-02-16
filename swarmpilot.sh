@@ -385,7 +385,7 @@ install_portainer() {
 
     # Create portainer.yaml configuration file
     log_info "Creating portainer configuration file..."
-    if ! bash -c 'cat <<EOF > ~/portainer.yaml
+    if ! bash -c 'cat <<EOF > portainer.yaml
 services:
   agent:
     image: portainer/agent:lts
@@ -441,7 +441,6 @@ EOF'; then
     fi
 
     log_success "Portainer successfully deployed on local node"
-    log_info "Portainer will be accessible at https://<virtual_ip>:9443"
     return 0
 }
 
@@ -450,12 +449,12 @@ install_nginxproxymanager() {
     log_info "Installing Nginx Proxy Manager on local node..."
     
     # Create directories with error handling
-    if ! sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_data 2>/dev/null; then
+    if ! sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_data > /dev/null; then
         log_error "Failed to create Nginx Proxy Manager data directory: $npm_data_dir"
         return 1
     fi
     
-    if ! sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_letsencrypt 2>/dev/null; then
+    if ! sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_letsencrypt > /dev/null; then
         log_error "Failed to create Nginx Proxy Manager letsencrypt directory: $npm_letsencrypt_dir"
         return 1
     fi
@@ -468,7 +467,7 @@ install_nginxproxymanager() {
 
     # Create nginxproxymanager.yaml configuration file
     log_info "Creating Nginx Proxy Manager configuration file..."
-    if ! bash -c 'cat <<EOF > ~/nginxproxymanager.yaml
+    if ! bash -c 'cat <<EOF > nginxproxymanager.yaml
 services:
   app:
     image: 'jc21/nginx-proxy-manager:latest'
@@ -499,7 +498,6 @@ EOF'; then
     fi
 
     log_success "Nginx Proxy Manager successfully deployed on local node"
-    log_info "Nginx Proxy Manager will be accessible at http://<virtual_ip>:81"
     return 0
 }
 
@@ -554,12 +552,12 @@ EOF"
 
     # Test Docker installation
     if [ "$is_local" = true ]; then
-        if ! sudo docker run --rm hello-world; then
+        if ! sudo docker run --rm hello-world > /dev/null; then
             log_warning "Docker installation may have issues"
             return 1
         fi
     else
-        if ! remote_exec_sudo "$node_ip" "$username" "$password" "sudo docker run --rm hello-world"; then
+        if ! remote_exec_sudo "$node_ip" "$username" "$password" "sudo docker run --rm hello-world > /dev/null"; then
             log_warning "Docker installation may have issues on node $node_name"
             return 1
         fi
@@ -636,7 +634,7 @@ main() {
     echo ""
 
     # Confirm installation
-    read -p "Do you want to proceed with Docker installation? (y/n): " CONFIRM
+    read -p "Do you want to start the installation? (y/n): " CONFIRM
     if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
         log_info "Installation cancelled by user"
         exit 0
@@ -673,10 +671,6 @@ main() {
         exit 1
     fi
 
-    echo ""
-    log_success "Local node Docker installation completed"
-    echo ""
-
 
 
     ###### Step 4: Install Docker on remote nodes
@@ -692,6 +686,12 @@ main() {
         echo ""
     done
 
+    echo ""
+    log_success "=========================================="
+    log_success "Docker installation Completed!"
+    log_success "=========================================="
+    echo ""
+
 
 
     ###### Step 5: Initialize Docker Swarm
@@ -701,7 +701,7 @@ main() {
 
     local SWARM_MANAGER_TOKEN
 
-    if ! sudo docker swarm init --advertise-addr "$LOCAL_NODE_IP"; then
+    if ! sudo docker swarm init --advertise-addr "$LOCAL_NODE_IP" >/dev/null; then
         log_error "Failed to initialize Docker Swarm on local node"
         exit 1
     fi
@@ -896,7 +896,7 @@ main() {
     local all_healthy=false
 
     while true; do
-        sleep 5
+        sleep 7
         local all_pass=true
         if ! check_syncthing_health "localhost" "$USER" "" "Local Node" true; then
             all_pass=false
