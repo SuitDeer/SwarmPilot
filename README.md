@@ -11,38 +11,20 @@ SwarmPilot helps you to deploy a high available docker swarm cluster from 1 to 9
 
 ## Components
 
-### Automated [Docker](https://www.docker.com) Installation
-- Installs Docker Engine, Docker CLI, containerd.io, and Docker plugins on all nodes
-- Configures Docker service to start automatically on boot
-- Validates Docker installation with hello-world test
+### [Docker](https://www.docker.com)
+Docker is a technology that bundles a software program with all the other software that application needs to run, such as an operating system, third-party software libraries, etc. Software bundled like this is called a container.
 
-### [Docker Swarm](https://docs.docker.com/engine/swarm/) Setup
-- Initializes Docker Swarm on the local node
-- Joins remote nodes to the swarm cluster
-- Supports clusters from 1 to 10 nodes
+### [Keepalived](https://keepalived.org/)
+Used for managing a virtual IP address for all cluster nodes
 
-### High Availability with [Keepalived](https://keepalived.org/)
-- Configures keepalived for virtual IP management
-- Automatic failover between nodes
-- Priority-based master election (local node gets highest priority)
-- Unicast peer configuration for communication
+### [Syncthing4Swarm](https://github.com/SuitDeer/syncthing4swarm/tree/main)
+Ensures persistent volume synchronization
 
-### File Synchronization with [Syncthing4Swarm](https://github.com/SuitDeer/syncthing4swarm/tree/main)
-- Deploys Syncthing4Swarm service across all nodes
-- Ensures persistent volume synchronization
-- Health checks to verify synchronization status
+### [Portainer](https://www.portainer.io/)
+It provides an intuitive graphical user interface and extensive API for managing resources such as containers, images, and networks via a Web interface 9443 (HTTPS)
 
-### Docker Management with [Portainer](https://www.portainer.io/)
-- Installs Portainer CE LTS
-- Configures Portainer Agent for swarm integration
-- Exposes Portainer on ports 9443 (HTTPS) and 8000 (HTTP)
-- Data persistence via Syncthing4Swarm
-
-### Reverse Proxy with [Nginx Proxy Manager](https://nginxproxymanager.com/)
-- Installs Nginx Proxy Manager for reverse proxy and SSL termination
-- Exposes on ports 80 (HTTP), 81 (Web UI), and 443 (HTTPS)
-- Data persistence via Syncthing4Swarm
-- Configured for cluster-wide access
+### [Nginx Proxy Manager](https://nginxproxymanager.com/)
+Used for a central reverse proxy and SSL termination for other docker services on this cluster. Web interface at 81 (HTTP)
 
 ## Topology
 
@@ -70,10 +52,70 @@ sudo chmod +x swarmpilot.sh
 sudo ./swarmpilot.sh
 ```
 
+## Maintanance
+
+### Upgrade Syncthing4Swarm Stack
+
+```bash
+cd SwarmPilot
+sudo docker stack deploy --resolve-image=always -c syncthing4swarm.yaml syncthing4swarm
+```
+
+### Upgrade Portainer Stack
+
+```bash
+cd SwarmPilot
+sudo docker stack deploy --resolve-image=always -c portainer.yaml portainer
+```
+
+### Upgrade Nginx Proxy Manager Stack
+
+```bash
+cd SwarmPilot
+sudo docker stack deploy --resolve-image=always -c nginxproxymanager.yaml nginxproxymanager
+```
+
+## Setup a demo stack on cluster
+
+Please use the `nginx_ingress` overlay network for your stacks if you need ssl termination via Nginx Proxy Manager.
+
+Example:
+
+If your stack containers need persistent volumes please first create the root directory in the syced syncthind directory:
+
+```bash
+sudo mkdir /var/syncthing/data/<FOLDER_NAME>
+```
+
+```yaml
+services:
+  webserver:
+    image: nginxdemos/hello
+    volumes:
+     - /mnt/dockerswarmvol/<FOLDER_NAME>:/var/www/html
+    networks:
+      - nginx_ingress
+    ports:
+      - 8082:80
+networks:
+  nginx_ingress:
+    external: true
+```
+
+Because the Nginx Proxy Manager-container and the your new docker stack containers now connected to the same overlay network `nginx_ingress` you can reference your containers in Nginx Proxy Manager via their servicenames.
+
+```
+services:
+  webserver: <---- This is the service-name of the container
+...............
+```
+
+![Nginy Proxy Manager adding a Proxy Host](pictures/nginx-proxy-manager.png)
+
 ---
 ---
 
-## Script Workflow
+## Detailed Script Workflow Steps
 
 The [`swarmpilot.sh`](swarmpilot.sh) script automates the entire cluster setup process through the following steps:
 
@@ -90,7 +132,7 @@ The [`swarmpilot.sh`](swarmpilot.sh) script automates the entire cluster setup p
 - Checks `sshpass` installation on all remote nodes
 - Ensures SSH connectivity to all nodes
 
-### Step 3: Docker Installation on Local Node
+### Step 3: Docker Installation
 - Updates package lists
 - Installs required dependencies (ca-certificates, curl)
 - Adds Docker GPG key and repository
@@ -98,16 +140,12 @@ The [`swarmpilot.sh`](swarmpilot.sh) script automates the entire cluster setup p
 - Enables and starts Docker service
 - Validates installation with hello-world test
 
-### Step 4: Docker Installation on Remote Nodes
-- Executes the same Docker installation commands on all remote nodes
-- Validates installation on each node
-
-### Step 5: Docker Swarm Initialization
+### Step 4: Docker Swarm Initialization
 - Initializes Docker Swarm on the local node with the specified advertise address
 - Retrieves the manager join token
 - Joins all remote nodes to the swarm using the join token
 
-### Step 6: Keepalived Configuration (for clusters > 1 node)
+### Step 5: Keepalived Configuration (for clusters > 1 node)
 - Prompts for virtual IP address for the cluster
 - Calculates priorities for each node (local node: 255, remote nodes: 254, 253, etc.)
 - Installs and configures keepalived on all nodes:
@@ -117,30 +155,23 @@ The [`swarmpilot.sh`](swarmpilot.sh) script automates the entire cluster setup p
   - Enables and starts keepalived service
 - Configures automatic failover between nodes
 
-### Step 7: Syncthing4Swarm Installation
+### Step 6: Syncthing4Swarm Installation
 - Creates `/var/syncthing/data` directory on all nodes
-- Clones the Syncthing4Swarm repository on the local node
+- Creates syncthing4swarm.yaml configuration file
 - Deploys Syncthing4Swarm Docker stack
 - Installs Syncthing4Swarm on all remote nodes
 - Monitors container health until all containers are healthy
 
-### Step 8: Portainer Installation
+### Step 7: Portainer Installation
 - Creates portainer data directory
-- Creates portainer.yaml configuration file with:
-  - Portainer Agent (global deployment)
-  - Portainer CE LTS (replicated deployment on manager nodes)
-  - Network configuration (overlay driver)
-  - Volume mounts for data persistence
+- Creates portainer.yaml configuration file
 - Deploys Portainer stack
 - Exposes Portainer on ports 9443 (HTTPS) and 8000 (HTTP)
 - Verifies Portainer accessibility
 
-### Step 9: Nginx Proxy Manager Installation
+### Step 8: Nginx Proxy Manager Installation
 - Creates data directories for Nginx Proxy Manager
 - Creates nginxproxymanager.yaml configuration file with:
-  - Nginx Proxy Manager application
-  - Volume mounts for data persistence
-  - Network configuration (overlay driver)
 - Deploys Nginx Proxy Manager stack
 - Exposes on ports 80 (HTTP), 81 (Web UI), and 443 (HTTPS)
 - Verifies Nginx Proxy Manager accessibility
