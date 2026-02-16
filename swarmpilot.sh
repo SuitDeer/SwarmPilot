@@ -660,10 +660,11 @@ main() {
         # Build unicast peers list for local node (all remote nodes)
         local local_peers=""
         for i in "${!NODES[@]}"; do
+            IFS=':' read -r PEER_IP PEER_USERNAME PEER_PASSWORD <<< "${NODES[$i]}"
             if [ -z "$local_peers" ]; then
-                local_peers="${NODES[$i]}"
+                local_peers="$PEER_IP"
             else
-                local_peers="$local_peers ${NODES[$i]}"
+                local_peers="$local_peers $PEER_IP"
             fi
         done
 
@@ -684,15 +685,11 @@ main() {
             local priority=$((254 - i))
 
             # Build unicast peers list (all nodes except current)
-            local peers=""
+            local peers="$LOCAL_NODE_IP"
             for j in "${!NODES[@]}"; do
                 if [ "$j" -ne "$i" ]; then
                     IFS=':' read -r PEER_IP PEER_USERNAME PEER_PASSWORD <<< "${NODES[$j]}"
-                    if [ -z "$peers" ]; then
-                        peers="$PEER_IP"
-                    else
-                        peers="$peers $PEER_IP"
-                    fi
+                    peers="$peers $PEER_IP"
                 fi
             done
 
