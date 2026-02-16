@@ -34,7 +34,7 @@ Run only on **one node**:
 ```bash
 # Clone the repository
 git clone https://github.com/SuitDeer/SwarmPilot.git
-cd swarmpilot
+cd SwarmPilot
 
 # Deploy to Swarm
 sudo chmod +x swarmpilot.sh

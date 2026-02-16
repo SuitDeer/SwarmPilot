@@ -110,7 +110,7 @@ detect_network_interface() {
         echo "$interface_name"
     else
         # Detect interface on remote node
-        local interface_name=$(echo "$password" | sshpass -p "$password" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "ip -br addr show | grep '$node_ip' | awk '{print $1}'")
+        local interface_name=$(sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "ip -br addr show | grep '$node_ip' | awk '{print $1}'")
         if [ -z "$interface_name" ]; then
             log_error "Could not detect network interface on node $node_ip"
             return 1
@@ -144,7 +144,7 @@ install_keepalived() {
             return 1
         fi
     else
-        if ! echo "$password" | sshpass -p "$password" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "$install_cmd"; then
+        if ! sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "$install_cmd"; then
             log_error "Failed to install keepalived on node $node_name"
             return 1
         fi
@@ -194,7 +194,7 @@ install_keepalived() {
             return 1
         fi
     else
-        if ! echo "$config_content" | sshpass -p "$password" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "sudo tee /etc/keepalived/keepalived.conf > /dev/null"; then
+        if ! echo "$config_content" | sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "sudo tee /etc/keepalived/keepalived.conf > /dev/null"; then
             log_error "Failed to write keepalived configuration on node $node_name"
             return 1
         fi
@@ -208,7 +208,7 @@ install_keepalived() {
             return 1
         fi
     else
-        if ! echo "$password" | sshpass -p "$password" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "$enable_cmd"; then
+        if ! sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "$enable_cmd"; then
             log_error "Failed to enable keepalived on node $node_name"
             return 1
         fi
@@ -244,7 +244,7 @@ install_syncthing4swarm() {
             return 1
         fi
     else
-        if ! echo "$password" | sshpass -p "$password" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "$create_dir_cmd"; then
+        if ! sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "$create_dir_cmd"; then
             log_error "Failed to create /var/syncthing/data on node $node_name"
             return 1
         fi
@@ -253,7 +253,7 @@ install_syncthing4swarm() {
     # On local node only: clone repository and deploy docker stack
     if [ "$is_local" = true ]; then
         log_info "Cloning syncthing4swarm repository..."
-        
+
         # Check if directory already exists
         if [ -d "syncthing4swarm" ]; then
             log_warning "syncthing4swarm directory already exists. Skipping clone."
@@ -303,7 +303,7 @@ check_syncthing_health() {
     if [ "$is_local" = true ]; then
         container_status=$(eval "$check_cmd")
     else
-        container_status=$(echo "$password" | sshpass -p "$password" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "$check_cmd")
+        container_status=$(sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "$check_cmd")
     fi
 
     if [ -z "$container_status" ]; then
@@ -421,7 +421,7 @@ install_docker() {
         "sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
 Types: deb
 URIs: https://download.docker.com/linux/ubuntu
-Suites: $(. /etc/os-release && echo \"\${UBUNTU_CODENAME:-\$VERSION_CODENAME}\")
+Suites: \$(. /etc/os-release && echo "\${UBUNTU_CODENAME:-\$VERSION_CODENAME}")
 Components: stable
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF"
@@ -439,7 +439,7 @@ EOF"
                 return 1
             fi
         else
-            if ! echo "$password" | sshpass -p "$password" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "$cmd"; then
+            if ! sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "$cmd"; then
                 log_error "Failed to execute command on node $node_name: $cmd"
                 return 1
             fi
@@ -453,7 +453,7 @@ EOF"
             return 1
         fi
     else
-        if ! echo "$password" | sshpass -p "$password" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "sudo -u $username docker run --rm hello-world"; then
+        if ! sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "sudo -u $username docker run --rm hello-world"; then
             log_warning "Docker installation may have issues on node $node_name"
             return 1
         fi
@@ -484,9 +484,10 @@ main() {
         NODES=()
         NODE_NAMES=("Local Node")
     else
-        log_info "Configuring $((NODE_COUNT - 1)) additional nodes..."
+        log_info "Configuring $((NODE_COUNT - 1)) remote nodes (not local)..."
 
         for i in $(seq 1 $((NODE_COUNT - 1))); do
+            echo ""
             log_info "Node $i of $((NODE_COUNT - 1))"
 
             # Get IP address
