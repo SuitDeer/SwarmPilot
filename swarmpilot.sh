@@ -32,13 +32,13 @@ log_error() {
 # Function to display banner
 display_banner() {
     echo -e "${BLUE}"
-    echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║                                                            ║"
-    echo "║           SwarmPilot - Docker Cluster Setup                ║"
-    echo "║                                                            ║"
-    echo "║         Automated Docker Installation for Ubuntu           ║"
-    echo "║                                                            ║"
-    echo "╚════════════════════════════════════════════════════════════╝"
+    echo "╔════════════════════════════════════════════╗"
+    echo "║                                            ║"
+    echo "║     SwarmPilot - Docker Cluster Setup      ║"
+    echo "║                                            ║"
+    echo "║  Automated Docker Installation for Ubuntu  ║"
+    echo "║                                            ║"
+    echo "╚════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
 
@@ -509,7 +509,7 @@ EOF'; then
 
     # Deploy Nginx Proxy Manager stack
     log_info "Deploying Nginx Proxy Manager stack..."
-    if ! sudo docker stack deploy -c nginxproxymanager.yaml nginxproxymanager; then
+    if ! sudo docker stack deploy -c nginxproxymanager.yaml nginxproxymanager >/dev/null 2>&1; then
         log_error "Failed to deploy Nginx Proxy Manager stack"
         return 1
     fi
@@ -534,8 +534,8 @@ install_docker() {
 
     # Docker installation commands
     local docker_commands=(
-        "sudo apt -q update > /dev/null 2>&1"
-        "sudo apt install -y -q ca-certificates curl > /dev/null 2>&1"
+        "sudo apt -q update >/dev/null 2>&1"
+        "sudo apt install -y -q ca-certificates curl >/dev/null 2>&1"
         "sudo install -m 0755 -d /etc/apt/keyrings"
         "sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc"
         "sudo chmod a+r /etc/apt/keyrings/docker.asc"
@@ -546,10 +546,10 @@ Suites: \$(. /etc/os-release && echo "\${UBUNTU_CODENAME:-\$VERSION_CODENAME}")
 Components: stable
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF"
-        "sudo apt -q update > /dev/null 2>&1"
-        "sudo apt install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin > /dev/null 2>&1"
-        "sudo systemctl enable docker"
-        "sudo systemctl start docker"
+        "sudo apt -q update >/dev/null 2>&1"
+        "sudo apt install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null 2>&1"
+        "sudo systemctl enable docker >/dev/null 2>&1"
+        "sudo systemctl start docker >/dev/null 2>&1"
     )
 
     # Execute commands
@@ -569,12 +569,12 @@ EOF"
 
     # Test Docker installation
     if [ "$is_local" = true ]; then
-        if ! sudo docker run --rm hello-world > /dev/null 2>&1; then
+        if ! sudo docker run --rm hello-world >/dev/null 2>&1; then
             log_warning "Docker installation may have issues"
             return 1
         fi
     else
-        if ! remote_exec_sudo "$node_ip" "$username" "$password" "sudo docker run --rm hello-world > /dev/null 2>&1"; then
+        if ! remote_exec_sudo "$node_ip" "$username" "$password" "sudo docker run --rm hello-world >/dev/null 2>&1"; then
             log_warning "Docker installation may have issues on node $node_name"
             return 1
         fi
@@ -637,9 +637,9 @@ main() {
     log_info "Configuration Summary:"
     echo "----------------------"
     echo "Total nodes: $NODE_COUNT"
-    echo "Local node: Yes"
+    echo "Node 0 (${LOCAL_NODE_IP}) local node"
     for i in "${!NODE_NAMES[@]}"; do
-        echo "Node $((i + 1)): ${NODE_NAMES[$i]}"
+        echo "${NODE_NAMES[$i]}"
     done
     echo ""
 
@@ -697,8 +697,6 @@ main() {
             log_error "Failed to install Docker on $NODE_NAME"
             exit 1
         fi
-
-        echo ""
     done
     echo ""
     log_success "=========================================="
@@ -768,21 +766,12 @@ main() {
         log_info "Keepalived Configuration Summary:"
         echo "-----------------------------------"
         echo "Virtual IP: $VIRTUAL_IP"
-        echo "Virtual Router ID: 51"
-        echo "Authentication: PASS (12345)"
-        echo ""
         echo "Node Priorities:"
         echo "  Local Node: 255 (MASTER)"
         for i in "${!NODES[@]}"; do
             local priority=$((254 - i))
             echo "  Node $((i + 1)): $priority (BACKUP)"
         done
-        echo ""
-
-        # Confirm keepalived installation
-        echo ""
-        log_info "Starting keepalived installation..."
-        echo ""
 
         # Build unicast peers list for local node (all remote nodes)
         local local_peers=""
@@ -820,8 +809,6 @@ main() {
                 log_error "Failed to install keepalived on $NODE_NAME"
                 exit 1
             fi
-
-            echo ""
         done
         echo ""
         log_success "=========================================="
@@ -858,7 +845,6 @@ main() {
                 log_error "Failed to install syncthing4swarm on $NODE_NAME"
                 exit 1
             fi
-
             echo ""
         done
         echo ""
@@ -901,10 +887,7 @@ main() {
         fi
         echo ""
     done
-
-    echo ""
     log_success "All syncthing containers are healthy"
-    echo ""
 
     # Install portainer on local node
     if ! install_portainer; then
