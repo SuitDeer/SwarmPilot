@@ -121,6 +121,31 @@ remote_exec_sudo_with_stdin() {
     } | sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "sudo -S -p '' bash -lc $quoted_command"
 }
 
+# Function to check if sshpass is installed on a node
+check_sshpass_installed() {
+    local node_ip="$1"
+    local username="$2"
+    local password="$3"
+    local node_name="$4"
+    local is_local="${5:-false}"
+
+    if [ "$is_local" = true ]; then
+        if ! command -v sshpass >/dev/null 2>&1; then
+            log_error "sshpass is not installed on local node"
+            return 1
+        fi
+        log_success "sshpass is installed on local node"
+    else
+        if ! sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "command -v sshpass >/dev/null 2>&1"; then
+            log_error "sshpass is not installed on $node_name"
+            return 1
+        fi
+        log_success "sshpass is installed on $node_name"
+    fi
+
+    return 0
+}
+
 # Function to detect network interface
 detect_network_interface() {
     local is_local="${1:-false}"
@@ -554,6 +579,25 @@ main() {
         log_info "Installation cancelled by user"
         exit 0
     fi
+
+    echo ""
+    log_info "Running pre-flight checks..."
+    echo ""
+
+    if ! check_sshpass_installed "localhost" "$USER" "" "Local Node" true; then
+        log_error "Please install sshpass on local node: sudo apt install -y sshpass"
+        exit 1
+    fi
+
+    for i in "${!NODES[@]}"; do
+        IFS=':' read -r NODE_IP NODE_USERNAME NODE_PASSWORD <<< "${NODES[$i]}"
+        NODE_NAME="${NODE_NAMES[$i]}"
+
+        if ! check_sshpass_installed "$NODE_IP" "$NODE_USERNAME" "$NODE_PASSWORD" "$NODE_NAME" false; then
+            log_error "Please install sshpass on $NODE_NAME before continuing"
+            exit 1
+        fi
+    done
 
     echo ""
     log_info "Starting Docker installation..."
