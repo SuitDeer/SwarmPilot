@@ -52,29 +52,6 @@ sudo chmod +x swarmpilot.sh
 sudo ./swarmpilot.sh
 ```
 
-## Maintanance
-
-### Upgrade Syncthing4Swarm Stack
-
-```bash
-cd SwarmPilot
-sudo docker stack deploy --resolve-image=always -c syncthing4swarm.yaml syncthing4swarm
-```
-
-### Upgrade Portainer Stack
-
-```bash
-cd SwarmPilot
-sudo docker stack deploy --resolve-image=always -c portainer.yaml portainer
-```
-
-### Upgrade Nginx Proxy Manager Stack
-
-```bash
-cd SwarmPilot
-sudo docker stack deploy --resolve-image=always -c nginxproxymanager.yaml nginxproxymanager
-```
-
 ## Setup a demo stack on cluster
 
 Please use the `nginx_ingress` overlay network for your stacks if you need ssl termination via Nginx Proxy Manager.
@@ -111,6 +88,29 @@ services:
 ```
 
 ![Nginy Proxy Manager adding a Proxy Host](pictures/nginx-proxy-manager.png)
+
+## Maintanance
+
+### Upgrade Syncthing4Swarm Stack
+
+```bash
+cd SwarmPilot
+sudo docker stack deploy --resolve-image=always -c syncthing4swarm.yaml syncthing4swarm
+```
+
+### Upgrade Portainer Stack
+
+```bash
+cd SwarmPilot
+sudo docker stack deploy --resolve-image=always -c portainer.yaml portainer
+```
+
+### Upgrade Nginx Proxy Manager Stack
+
+```bash
+cd SwarmPilot
+sudo docker stack deploy --resolve-image=always -c nginxproxymanager.yaml nginxproxymanager
+```
 
 ---
 ---
