@@ -320,12 +320,6 @@ check_syncthing_health() {
     local node_name="$4"
     local is_local="${5:-false}"
 
-    if [ "$is_local" = true ]; then
-        log_info "Checking syncthing container health on local node..."
-    else
-        log_info "Checking syncthing container health on node $node_name..."
-    fi
-
     local check_cmd="sudo docker ps --filter 'name=syncthing4swarm_syncthing4swarm' --format '{{.Status}}'"
     local container_status
 
@@ -349,7 +343,7 @@ check_syncthing_health() {
         fi
         return 0
     else
-        log_error "syncthing containers are not healthy on $node_name. Status: $container_status"
+        log_warning "syncthing containers are not healthy yet on $node_name. Status: $container_status"
         return 1
     fi
 }
@@ -500,6 +494,10 @@ EOF"
 main() {
     display_banner
 
+    local LOCAL_NODE_IP
+    log_info "Enter local node IP address (this node)"
+    LOCAL_NODE_IP=$(get_valid_input "Local node IP address: " "validate_ip \$REPLY")
+
     ###### Step 1: Get number of nodes
     log_info "How many nodes should the cluster have? (1-9, including this node)"
     NODE_COUNT=$(get_valid_input "Enter number of nodes: " "validate_node_count \$REPLY")
@@ -589,11 +587,9 @@ main() {
     log_info "Initializing Docker Swarm cluster..."
     echo ""
 
-    local SWARM_LOCAL_IP
     local SWARM_MANAGER_TOKEN
-    SWARM_LOCAL_IP=$(get_valid_input "Enter local node IP address for swarm advertise-addr: " "validate_ip \$REPLY")
 
-    if ! sudo docker swarm init --advertise-addr "$SWARM_LOCAL_IP"; then
+    if ! sudo docker swarm init --advertise-addr "$LOCAL_NODE_IP"; then
         log_error "Failed to initialize Docker Swarm on local node"
         exit 1
     fi
@@ -608,7 +604,7 @@ main() {
         IFS=':' read -r NODE_IP NODE_USERNAME NODE_PASSWORD <<< "${NODES[$i]}"
         NODE_NAME="${NODE_NAMES[$i]}"
 
-        if ! remote_exec_sudo "$NODE_IP" "$NODE_USERNAME" "$NODE_PASSWORD" "docker swarm join --token $SWARM_MANAGER_TOKEN $SWARM_LOCAL_IP:2377"; then
+        if ! remote_exec_sudo "$NODE_IP" "$NODE_USERNAME" "$NODE_PASSWORD" "docker swarm join --token $SWARM_MANAGER_TOKEN $LOCAL_NODE_IP:2377"; then
             log_error "Failed to join $NODE_NAME to swarm"
             exit 1
         fi
@@ -670,11 +666,6 @@ main() {
                 local_peers="$local_peers ${NODES[$i]}"
             fi
         done
-
-
-        # Get local node IP address
-        LOCAL_NODE_IP=$(get_valid_input "Enter local node IP address (this node): " "validate_ip \$REPLY")
-
 
         # Install keepalived on local node
         if ! install_keepalived "$LOCAL_NODE_IP" "$USER" "" "Local Node" true "$VIRTUAL_IP" "255" "$local_peers"; then
@@ -790,7 +781,7 @@ main() {
     local all_healthy=false
 
     while true; do
-        sleep 3
+        sleep 5
         local all_pass=true
         if ! check_syncthing_health "localhost" "$USER" "" "Local Node" true; then
             all_pass=false
@@ -805,7 +796,7 @@ main() {
         if [ "$all_pass" = true ]; then
             break
         fi
-        echo "Not all syncthing containers are healthy yet..."
+        echo ""
     done
 
     echo ""
