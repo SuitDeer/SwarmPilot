@@ -477,9 +477,11 @@ install_nginxproxymanager() {
     fi
 
     # Create Nginx Proxy Manager docker network
-    if ! sudo docker network create --driver overlay --attachable nginx_ingress; then
+    if ! sudo docker network create --driver overlay --attachable nginx_ingress >/dev/null 2>&1; then
         log_error "Failed to create Nginx Proxy Manager docker network (nginx_ingress)"
         return 1
+    else
+        log_success "Created a overlay Network 'nginx_ingress' for Nginx Proxy Manager and other docker stacks to be used"
     fi
 
     # Create nginxproxymanager.yaml configuration file
@@ -715,6 +717,8 @@ main() {
     if ! sudo docker swarm init --advertise-addr "$LOCAL_NODE_IP" >/dev/null 2>&1; then
         log_error "Failed to initialize Docker Swarm on local node"
         exit 1
+    else
+        log_success "Initialized Docker Swarm on local node"
     fi
 
     SWARM_MANAGER_TOKEN=$(sudo docker swarm join-token manager -q)
@@ -727,9 +731,11 @@ main() {
         IFS=':' read -r NODE_IP NODE_USERNAME NODE_PASSWORD <<< "${NODES[$i]}"
         NODE_NAME="${NODE_NAMES[$i]}"
 
-        if ! remote_exec_sudo "$NODE_IP" "$NODE_USERNAME" "$NODE_PASSWORD" "docker swarm join --token $SWARM_MANAGER_TOKEN $LOCAL_NODE_IP:2377"; then
+        if ! remote_exec_sudo "$NODE_IP" "$NODE_USERNAME" "$NODE_PASSWORD" "docker swarm join --token $SWARM_MANAGER_TOKEN $LOCAL_NODE_IP:2377 >/dev/null 2>&1"; then
             log_error "Failed to join $NODE_NAME to swarm"
             exit 1
+        else
+            log_success "$NODE_NAME joined the swarm"
         fi
     done
     echo ""
@@ -772,6 +778,7 @@ main() {
             local priority=$((254 - i))
             echo "  Node $((i + 1)): $priority (BACKUP)"
         done
+        echo ""
 
         # Build unicast peers list for local node (all remote nodes)
         local local_peers=""
@@ -845,7 +852,6 @@ main() {
                 log_error "Failed to install syncthing4swarm on $NODE_NAME"
                 exit 1
             fi
-            echo ""
         done
         echo ""
         log_success "=========================================="
