@@ -56,7 +56,7 @@ sudo ./swarmpilot.sh
 
 <!-- Embedding a GitHub Release video with HTML5 -->
 <video controls>
-  <source src="pictures/setup-demo-video.mp4" type="video/mp4">
+  <source src="https://raw.githubusercontent.com/SuitDeer/SwarmPilot/refs/heads/main/pictures/setup-demo-video.mp4" type="video/mp4">
   Your browser does not support the video tag.  
 </video>
 
