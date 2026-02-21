@@ -60,6 +60,8 @@ sudo ./swarmpilot.sh
   Your browser does not support the video tag.  
 </video>
 
+https://github.com/user-attachments/assets/4bd35877-4b11-4a83-b456-ab66db2a5267
+
 ## Setup a demo stack on cluster
 
 Please use the `nginx_ingress` overlay network for your stacks if you need ssl termination via Nginx Proxy Manager.
