@@ -52,6 +52,14 @@ sudo chmod +x swarmpilot.sh
 sudo ./swarmpilot.sh
 ```
 
+## Setup Video
+
+<!-- Embedding a GitHub Release video with HTML5 -->
+<video controls>
+  <source src="pictures/setup-demo-video.mp4" type="video/mp4">
+  Your browser does not support the video tag.  
+</video>
+
 ## Setup a demo stack on cluster
 
 Please use the `nginx_ingress` overlay network for your stacks if you need ssl termination via Nginx Proxy Manager.
