@@ -79,7 +79,7 @@ services:
   webserver:
     image: nginxdemos/hello
     volumes:
-     - /mnt/dockerswarmvol/<FOLDER_NAME>:/var/www/html
+     - /var/syncthing/data/<FOLDER_NAME>:/var/www/html
     networks:
       - nginx_ingress
     ports:
