@@ -321,7 +321,7 @@ services:
   syncthing4swarm:
     image: suitdeer/syncthing4swarm:latest
     volumes:
-      - /var/syncthing/data:/var/syncthing/data
+      - /var/syncthing:/var/syncthing
     deploy:
       mode: global
     environment:
