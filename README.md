@@ -1,4 +1,20 @@
-# SwarmPilot
+# SwarmPilot 
+
+> ℹ️ For all that are currently using the `suitdeer/syncthing4swarm`-docker image, please switch to `syncthing4swarm/syncthing4swarm`-docker image. (My pull request repository was merged into the main repository 😄)
+>
+> 1. Update the `syncthing4swarm.yaml` file inside the `SwarmPilot` folder. 
+> 
+>    Replace the the line `image: suitdeer/syncthing4swarm:latest` 
+> 
+>    with `image: syncthing4swarm/syncthing4swarm:latest`
+> 2. Update the syncthing4swarm docker service:
+> 
+>    ```bash
+>    cd SwarmPilot
+>    sudo docker stack deploy --resolve-image=always -c syncthing4swarm.yaml syncthing4swarm
+>    ```
+
+> For all that are new (after 07.03.2026) you do not need to do anything 😄
 
 <p align="center">
   <img src="pictures/spaceship.svg" alt="cargo spaceship" width="300">
