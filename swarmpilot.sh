@@ -319,7 +319,7 @@ networks:
 
 services:
   syncthing4swarm:
-    image: suitdeer/syncthing4swarm:latest
+    image: syncthing4swarm/syncthing4swarm:latest
     volumes:
       - /var/syncthing:/var/syncthing
     deploy:
