@@ -11,6 +11,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Logging functions
 log_info() {
@@ -82,6 +83,12 @@ validate_username() {
 validate_password() {
     local password="$1"
     [[ ${#password} -ge 8 ]] && [[ ${#password} -le 128 ]]
+}
+
+# Function to validate email address
+validate_email() {
+    local email="$1"
+    [[ "$email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]
 }
 
 # Function to get password with masking
@@ -311,7 +318,7 @@ install_syncthing4swarm() {
 
         # Create syncthing4swarm.yaml configuration file
         log_info "Creating syncthing4swarm configuration file..."
-        if ! bash -c 'cat <<EOF > syncthing4swarm.yaml
+        if ! tee "$SCRIPT_DIR/syncthing4swarm.yaml" >/dev/null <<EOF
 networks:
   syncthing4swarm:
     driver: overlay
@@ -332,19 +339,17 @@ services:
       - PGID=0
     networks:
       - syncthing4swarm
-EOF'; then
+EOF
+        then
             log_error "Failed to create syncthing4swarm configuration file"
             return 1
         fi
 
         log_info "Deploying syncthing4swarm with Docker Stack..."
-        if ! sudo docker stack deploy -c syncthing4swarm.yaml syncthing4swarm >/dev/null 2>&1; then
+        if ! sudo docker stack deploy -c "$SCRIPT_DIR/syncthing4swarm.yaml" syncthing4swarm >/dev/null 2>&1; then
             log_error "Failed to deploy syncthing4swarm stack"
-            cd ..
             return 1
         fi
-
-        cd ..
 
         log_success "syncthing4swarm successfully deployed on local node"
     else
@@ -402,7 +407,7 @@ install_portainer() {
 
     # Create portainer.yaml configuration file
     log_info "Creating portainer configuration file..."
-    if ! bash -c 'cat <<EOF > portainer.yaml
+    if ! tee "$SCRIPT_DIR/portainer.yaml" >/dev/null <<EOF
 services:
   agent:
     image: portainer/agent:lts
@@ -445,14 +450,15 @@ networks:
   agent_network:
     driver: overlay
     attachable: true
-EOF'; then
+EOF
+    then
         log_error "Failed to create portainer configuration file"
         return 1
     fi
 
     # Deploy portainer stack
     log_info "Deploying Portainer stack..."
-    if ! sudo docker stack deploy -c portainer.yaml portainer >/dev/null 2>&1; then
+    if ! sudo docker stack deploy -c "$SCRIPT_DIR/portainer.yaml" portainer >/dev/null 2>&1; then
         log_error "Failed to deploy portainer stack"
         return 1
     fi
@@ -464,29 +470,29 @@ EOF'; then
 # Function to install Nginx Proxy Manager on local node
 install_nginxproxymanager() {
     log_info "Installing Nginx Proxy Manager on local node..."
-    
+
     # Create directories with error handling
     if ! sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_data >/dev/null 2>&1; then
         log_error "Failed to create Nginx Proxy Manager data directory: $npm_data_dir"
         return 1
     fi
-    
+
     if ! sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_letsencrypt >/dev/null 2>&1; then
         log_error "Failed to create Nginx Proxy Manager letsencrypt directory: $npm_letsencrypt_dir"
         return 1
     fi
 
     # Create Nginx Proxy Manager docker network
-    if ! sudo docker network create --driver overlay --attachable nginx_ingress >/dev/null 2>&1; then
-        log_error "Failed to create Nginx Proxy Manager docker network (nginx_ingress)"
+    if ! sudo docker network create --driver overlay --attachable reverse_proxy >/dev/null 2>&1; then
+        log_error "Failed to create Nginx Proxy Manager docker network (reverse_proxy)"
         return 1
     else
-        log_success "Created a overlay Network 'nginx_ingress' for Nginx Proxy Manager and other docker stacks to be used"
+        log_success "Created a overlay Network 'reverse_proxy' for Nginx Proxy Manager and other docker stacks to be used"
     fi
 
     # Create nginxproxymanager.yaml configuration file
     log_info "Creating Nginx Proxy Manager configuration file..."
-    if ! bash -c 'cat <<EOF > nginxproxymanager.yaml
+    if ! tee "$SCRIPT_DIR/nginxproxymanager.yaml" >/dev/null <<EOF
 services:
   app:
     image: 'jc21/nginx-proxy-manager:latest'
@@ -499,24 +505,146 @@ services:
       - /var/syncthing/data/nginxproxymanager/npm_data:/data
       - /var/syncthing/data/nginxproxymanager/npm_letsencrypt:/etc/letsencrypt
     networks:
-      - nginx_ingress
+      - reverse_proxy
 
 networks:
-  nginx_ingress:
+  reverse_proxy:
     external: true
-EOF'; then
+EOF
+    then
         log_error "Failed to create Nginx Proxy Manager configuration file"
         return 1
     fi
 
     # Deploy Nginx Proxy Manager stack
     log_info "Deploying Nginx Proxy Manager stack..."
-    if ! sudo docker stack deploy -c nginxproxymanager.yaml nginxproxymanager >/dev/null 2>&1; then
+    if ! sudo docker stack deploy -c "$SCRIPT_DIR/nginxproxymanager.yaml" nginxproxymanager >/dev/null 2>&1; then
         log_error "Failed to deploy Nginx Proxy Manager stack"
         return 1
     fi
 
     log_success "Nginx Proxy Manager successfully deployed on local node"
+    return 0
+}
+
+# Function to install Traefik on local node
+install_traefik() {
+    local acme_email="$1"
+    local dashboard_auth_user="$2"
+    local dashboard_auth_sha1="$3"
+
+    log_info "Installing Traefik on local node..."
+
+    # Create directories with error handling
+    if ! sudo mkdir -p /var/syncthing/data/traefik/letsencrypt >/dev/null 2>&1; then
+        log_error "Failed to create Traefik letsencrypt directory"
+        return 1
+    fi
+
+    # Create Traefik docker network
+    if ! sudo docker network create --driver overlay --attachable reverse_proxy >/dev/null 2>&1; then
+        log_error "Failed to create Traefik docker network (reverse_proxy)"
+        return 1
+    else
+        log_success "Created a overlay Network 'reverse_proxy' for Traefik and other docker stacks to be used"
+    fi
+
+    # Create traefik.yaml configuration file
+    log_info "Creating Traefik configuration file..."
+    if ! tee "$SCRIPT_DIR/traefik.yaml" >/dev/null <<EOF
+services:
+  traefik:
+    image: traefik:v3
+    command:
+      # API & Dashboard
+      - "--api.dashboard=true" # Enable the dashboard
+      - "--api.insecure=false" # Explicitly disable insecure API mod
+
+      # Enable Docker Swarm provider
+      - "--providers.swarm.endpoint=unix:///var/run/docker.sock"
+      # Watch for Swarm service changes (requires socket access)
+      - "--providers.swarm.watch=true"
+      # Recommended: Dont expose services by default require explicit labels
+      - "--providers.swarm.exposedbydefault=false"
+      # Specify the default network for Traefik to connect to services
+      - "--providers.swarm.network=reverse_proxy"
+
+      # Define entrypoints
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.websecure.http.tls=true"
+
+      # Redirect HTTP to HTTPS
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+
+      # Lets Encrypt configuration
+      - --certificatesresolvers.letsencrypt.acme.email=${acme_email}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+
+      # Logging
+      - --log.level=WARN
+      - --accesslog=true
+
+    ports:
+      # Publish ports in host mode for direct access
+      - target: 80
+        published: 80
+        protocol: tcp
+      - target: 443
+        published: 443
+        protocol: tcp
+
+    volumes:
+      # Docker socket for service discovery
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Persistent storage for certificates
+      - /var/syncthing/data/traefik/letsencrypt:/letsencrypt
+
+    networks:
+      - reverse_proxy
+
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - "traefik.enable=true"
+
+        # Dashboard router
+        - "traefik.http.routers.dashboard.rule=PathPrefix(\`/dashboard\`) || PathPrefix(\`/api\`)"
+        - "traefik.http.routers.dashboard.entrypoints=websecure"
+        - "traefik.http.routers.dashboard.service=api@internal"
+        - "traefik.http.routers.dashboard.tls=true"
+
+        # Basicauth middleware
+        - "traefik.http.middlewares.dashboard-auth.basicauth.users=${dashboard_auth_user}:{SHA}${dashboard_auth_sha1}"
+        - "traefik.http.routers.dashboard.middlewares=dashboard-auth@swarm"
+
+        # Service hint
+        - "traefik.http.services.traefik.loadbalancer.server.port=8080"
+
+networks:
+  reverse_proxy:
+    external: true
+EOF
+    then
+        log_error "Failed to create Traefik configuration file"
+        return 1
+    fi
+
+    # Deploy Traefik stack
+    log_info "Deploying Traefik stack..."
+    if ! sudo docker stack deploy -c "$SCRIPT_DIR/traefik.yaml" traefik >/dev/null 2>&1; then
+        log_error "Failed to deploy Traefik stack"
+        return 1
+    fi
+
+    log_success "Traefik successfully deployed on local node"
     return 0
 }
 
@@ -598,6 +726,7 @@ main() {
     log_info "Enter local node IP address (this node)"
     LOCAL_NODE_IP=$(get_valid_input "Local node IP address: " "validate_ip \$REPLY")
 
+    echo ""
     log_info "How many nodes should the cluster have? (1-9, including this node)"
     NODE_COUNT=$(get_valid_input "Enter number of nodes: " "validate_node_count \$REPLY")
 
@@ -912,21 +1041,81 @@ main() {
 
     echo ""
     log_info "=========================================="
-    log_info "Step 8: Starting Nginx Proxy Manager installation..."
+    log_info "Step 8: Select and install reverse proxy..."
     log_info "=========================================="
     echo ""
-    # Install Nginx Proxy Manager on local node
-    if ! install_nginxproxymanager; then
-        log_error "Failed to install Nginx Proxy Manager on local node"
-        exit 1
+
+    local reverse_proxy_choice
+    while true; do
+        read -r -p "Choose reverse proxy (traefik/nginx proxy manager): " reverse_proxy_choice
+        case "${reverse_proxy_choice,,}" in
+            traefik|t)
+                reverse_proxy_choice="traefik"
+                break
+                ;;
+            nginx|nginxproxymanager|npm|n)
+                reverse_proxy_choice="nginx"
+                break
+                ;;
+            *)
+                log_error "Invalid choice. Please enter 'traefik' or 'nginxproxymanager'."
+                ;;
+        esac
+    done
+
+    if [ "$reverse_proxy_choice" = "traefik" ]; then
+        local acme_email
+        local traefik_dashboard_user
+        local traefik_dashboard_password
+        local traefik_dashboard_sha1
+        acme_email=$(get_valid_input "Enter a valid email address for Let's Encrypt ACME: " "validate_email \$REPLY")
+
+        traefik_dashboard_user=$(get_valid_input "Enter Traefik dashboard username: " "validate_username \$REPLY")
+
+        traefik_dashboard_password=$(get_password "Enter Traefik dashboard password: ")
+        while ! validate_password "$traefik_dashboard_password"; do
+            log_error "Password must be 8-128 characters"
+            traefik_dashboard_password=$(get_password "Enter Traefik dashboard password: ")
+        done
+
+        if ! command -v openssl >/dev/null 2>&1; then
+            log_error "openssl is required to generate SHA1 hash for Traefik dashboard authentication"
+            exit 1
+        fi
+
+        traefik_dashboard_sha1=$(printf '%s' "$traefik_dashboard_password" | openssl dgst -binary -sha1 | base64 | tr -d '\n')
+        if [ -z "$traefik_dashboard_sha1" ]; then
+            log_error "Failed to generate SHA1 hash for Traefik dashboard password"
+            exit 1
+        fi
+
+        # Install Traefik on local node
+        if ! install_traefik "$acme_email" "$traefik_dashboard_user" "$traefik_dashboard_sha1"; then
+            log_error "Failed to install Traefik on local node"
+            exit 1
+        fi
+
+        echo ""
+        log_success "=========================================="
+        log_success "Step 8: Traefik Installation Completed!"
+        log_success "        Web interface accessible at"
+        log_success "        https://<virtual_ip>/dashboard/"
+        log_success "=========================================="
+        echo ""
+    else
+        # Install Nginx Proxy Manager on local node
+        if ! install_nginxproxymanager; then
+            log_error "Failed to install Nginx Proxy Manager on local node"
+            exit 1
+        fi
+        echo ""
+        log_success "=========================================="
+        log_success "Step 8: Nginx Proxy Manager Installation Completed!"
+        log_success "        Web interface accessible at"
+        log_success "        http://<virtual_ip>:81"
+        log_success "=========================================="
+        echo ""
     fi
-    echo ""
-    log_success "=========================================="
-    log_success "Step 8: Nginx Proxy Manager Installation Completed!"
-    log_success "        Web interface accessible at"
-    log_success "        http://<virtual_ip>:81"
-    log_success "=========================================="
-    echo ""
 
 
 

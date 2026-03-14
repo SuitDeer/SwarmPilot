@@ -37,10 +37,19 @@ Used for managing a virtual IP address for all cluster nodes
 Ensures persistent volume synchronization
 
 ### [Portainer](https://www.portainer.io/)
-It provides an intuitive graphical user interface and extensive API for managing resources such as containers, images, and networks via a Web interface 9443 (HTTPS)
+It provides an intuitive graphical user interface and extensive API for managing resources such as containers, images, and networks via a 
 
-### [Nginx Proxy Manager](https://nginxproxymanager.com/)
-Used for a central reverse proxy and SSL termination for other docker services on this cluster. Web interface at 81 (HTTP)
+Web interface: [https://<virtual_ip>:9443](https://<virtual_ip>:9443)
+
+### [Nginx Proxy Manager](https://nginxproxymanager.com/) or [Traefik](https://traefik.io/traefik)
+Used for a central reverse proxy and SSL termination for other docker services on this cluster. 
+
+#### Nginx Proxy Manager
+Web Interface: [http://<virtual_ip>:81](http://<virtual_ip>:81)
+
+#### Traefik
+Web Interface: [https://<virtual_ip>/dashboard/](https://<virtual_ip>/dashboard/)
+Dashboard authentication: Basic Auth (username and password are requested during installation)
 
 ## Topology
 
@@ -78,9 +87,10 @@ sudo ./swarmpilot.sh
 
 https://github.com/user-attachments/assets/4bd35877-4b11-4a83-b456-ab66db2a5267
 
-## Setup a demo stack on cluster
+## Setup a demo service with lets encrypt certificate on cluster
 
-Please use the `nginx_ingress` overlay network for your stacks if you need ssl termination via Nginx Proxy Manager.
+Please use the `reverse_proxy` overlay network for your stacks if you need ssl termination via Nginx Proxy Manager or Traefik.
+
 
 Example:
 
@@ -90,6 +100,11 @@ If your stack containers need persistent volumes please first create the root di
 sudo mkdir /var/syncthing/data/<FOLDER_NAME>
 ```
 
+### Nginx Proxy Manager
+
+<details>
+<summary>Instructions for setting up a Service with Nginx Proxy Manager</summary>
+
 ```yaml
 services:
   webserver:
@@ -97,15 +112,15 @@ services:
     volumes:
      - /var/syncthing/data/<FOLDER_NAME>:/var/www/html
     networks:
-      - nginx_ingress
+      - reverse_proxy
     ports:
       - 8082:80
 networks:
-  nginx_ingress:
+  reverse_proxy:
     external: true
 ```
 
-Because the Nginx Proxy Manager-container and the your new docker stack containers now connected to the same overlay network `nginx_ingress` you can reference your containers in Nginx Proxy Manager via their servicenames.
+Since both the Nginx Proxy Manager container and your new service stack are connected to the same overlay network `reverse_proxy`, you should reference containers in Nginx Proxy Manager by their service names.
 
 ```
 services:
@@ -114,6 +129,49 @@ services:
 ```
 
 ![Nginy Proxy Manager adding a Proxy Host](pictures/nginx-proxy-manager.png)
+
+</details>
+
+
+### Traefik
+
+<details>
+<summary>Instructions for setting up a Service with Traefik</summary>
+
+**Please edit `app.example.com` to your liking**
+
+```yaml
+services:
+  webserver:
+    image: nginxdemos/hello
+    volumes:
+     - /var/syncthing/data/<FOLDER_NAME>:/var/www/html
+    networks:
+      - reverse_proxy
+    ports:
+      - 8082:80
+    deploy:
+      labels:
+        # Enable Traefik routing for this service
+        - traefik.enable=true
+
+        # Define the router
+        - traefik.http.routers.webapp.rule=Host(`app.example.com`)
+        - traefik.http.routers.webapp.entrypoints=websecure
+        - traefik.http.routers.webapp.tls.certresolver=letsencrypt
+
+        # Define the service (required for Swarm)
+        - traefik.http.services.webapp.loadbalancer.server.port=8082
+
+        # Health check for load balancing
+        - traefik.http.services.webapp.loadbalancer.healthcheck.path=/
+        - traefik.http.services.webapp.loadbalancer.healthcheck.interval=10s
+networks:
+  reverse_proxy:
+    external: true
+```
+
+</details>
 
 ## Maintanance
 
@@ -136,6 +194,13 @@ sudo docker stack deploy --resolve-image=always -c portainer.yaml portainer
 ```bash
 cd SwarmPilot
 sudo docker stack deploy --resolve-image=always -c nginxproxymanager.yaml nginxproxymanager
+```
+
+### Upgrade Traefik Stack
+
+```bash
+cd SwarmPilot
+sudo docker stack deploy --resolve-image=always -c traefik.yaml traefik
 ```
 
 ---
@@ -182,22 +247,33 @@ The [`swarmpilot.sh`](swarmpilot.sh) script automates the entire cluster setup p
 - Configures automatic failover between nodes
 
 ### Step 6: Syncthing4Swarm Installation
-- Creates `/var/syncthing/data` directory on all nodes
-- Creates syncthing4swarm.yaml configuration file
-- Deploys Syncthing4Swarm Docker stack
-- Installs Syncthing4Swarm on all remote nodes
-- Monitors container health until all containers are healthy
+- For clusters with more than 1 node: creates `/var/syncthing/data` on all nodes
+- On the local node: creates `syncthing4swarm.yaml` and deploys the Syncthing4Swarm stack
+- On remote nodes: prepares the required syncthing directory
+- For single-node clusters: skips Syncthing4Swarm setup
 
 ### Step 7: Portainer Installation
+- Waits until Syncthing4Swarm containers report healthy on all nodes
 - Creates portainer data directory
 - Creates portainer.yaml configuration file
 - Deploys Portainer stack
 - Exposes Portainer on ports 9443 (HTTPS) and 8000 (HTTP)
-- Verifies Portainer accessibility
+- Publishes the Portainer dashboard at `https://<virtual_ip>:9443`
 
-### Step 8: Nginx Proxy Manager Installation
-- Creates data directories for Nginx Proxy Manager
-- Creates nginxproxymanager.yaml configuration file with:
-- Deploys Nginx Proxy Manager stack
-- Exposes on ports 80 (HTTP), 81 (Web UI), and 443 (HTTPS)
-- Verifies Nginx Proxy Manager accessibility
+### Step 8: Reverse Proxy Selection and Installation
+
+- Prompts the user to choose `Traefik` or `Nginx Proxy Manager`
+- If `Traefik` is selected, the script:
+  - Prompts for a valid email address for Let's Encrypt ACME
+  - Prompts for dashboard username and password
+  - Generates a password hash for Traefik Basic Auth
+  - Creates the shared overlay network `reverse_proxy` (if needed)
+  - Creates `traefik.yaml` and deploys the Traefik stack
+  - Exposes ports 80 (HTTP) and 443 (HTTPS)
+  - Publishes the Traefik dashboard at `https://<virtual_ip>/dashboard/` (protected by Basic Auth)
+- If `Nginx Proxy Manager` is selected, the script:
+  - Creates required Nginx Proxy Manager data directories
+  - Creates the shared overlay network `reverse_proxy` (if needed)
+  - Creates `nginxproxymanager.yaml` and deploys the Nginx Proxy Manager stack
+  - Exposes ports 80 (HTTP), 81 (Web UI), and 443 (HTTPS)
+  - Publishes the Nginx Proxy Manager dashboard at `http://<virtual_ip>:81`
