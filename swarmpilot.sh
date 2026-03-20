@@ -319,11 +319,6 @@ install_syncthing4swarm() {
         # Create syncthing4swarm.yaml configuration file
         log_info "Creating syncthing4swarm configuration file..."
         if ! tee "$SCRIPT_DIR/syncthing4swarm.yaml" >/dev/null <<EOF
-networks:
-  syncthing4swarm:
-    driver: overlay
-    internal: true
-
 services:
   syncthing4swarm:
     image: syncthing4swarm/syncthing4swarm:latest
@@ -339,6 +334,11 @@ services:
       - PGID=0
     networks:
       - syncthing4swarm
+
+networks:
+  syncthing4swarm:
+    driver: overlay
+    internal: true
 EOF
         then
             log_error "Failed to create syncthing4swarm configuration file"
@@ -506,7 +506,6 @@ services:
       - /var/syncthing/data/nginxproxymanager/npm_letsencrypt:/etc/letsencrypt
     networks:
       - reverse_proxy
-
 networks:
   reverse_proxy:
     external: true
@@ -559,7 +558,6 @@ services:
       # API & Dashboard
       - "--api.dashboard=true" # Enable the dashboard
       - "--api.insecure=false" # Explicitly disable insecure API mod
-
       # Enable Docker Swarm provider
       - "--providers.swarm.endpoint=unix:///var/run/docker.sock"
       # Watch for Swarm service changes (requires socket access)
@@ -568,26 +566,21 @@ services:
       - "--providers.swarm.exposedbydefault=false"
       # Specify the default network for Traefik to connect to services
       - "--providers.swarm.network=reverse_proxy"
-
       # Define entrypoints
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.websecure.http.tls=true"
-
       # Redirect HTTP to HTTPS
       - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
       - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
       - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
-
       # Lets Encrypt configuration
-      - --certificatesresolvers.letsencrypt.acme.email=${acme_email}
-      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
-      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
-
+      - "--certificatesresolvers.letsencrypt.acme.email=${acme_email}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
       # Logging
-      - --log.level=WARN
-      - --accesslog=true
-
+      - "--log.level=WARN"
+      - "--accesslog=true"
     ports:
       # Publish ports in host mode for direct access
       - target: 80
@@ -596,16 +589,13 @@ services:
       - target: 443
         published: 443
         protocol: tcp
-
     volumes:
       # Docker socket for service discovery
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # Persistent storage for certificates
       - /var/syncthing/data/traefik/letsencrypt:/letsencrypt
-
     networks:
       - reverse_proxy
-
     deploy:
       mode: replicated
       replicas: 1
@@ -614,20 +604,16 @@ services:
           - node.role == manager
       labels:
         - "traefik.enable=true"
-
         # Dashboard router
         - "traefik.http.routers.dashboard.rule=PathPrefix(\`/dashboard\`) || PathPrefix(\`/api\`)"
         - "traefik.http.routers.dashboard.entrypoints=websecure"
         - "traefik.http.routers.dashboard.service=api@internal"
         - "traefik.http.routers.dashboard.tls=true"
-
         # Basicauth middleware
         - "traefik.http.middlewares.dashboard-auth.basicauth.users=${dashboard_auth_user}:{SHA}${dashboard_auth_sha1}"
         - "traefik.http.routers.dashboard.middlewares=dashboard-auth@swarm"
-
         # Service hint
         - "traefik.http.services.traefik.loadbalancer.server.port=8080"
-
 networks:
   reverse_proxy:
     external: true
