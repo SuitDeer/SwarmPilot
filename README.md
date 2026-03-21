@@ -1,20 +1,4 @@
-# SwarmPilot 
-
-> ℹ️ For all that are currently using the `suitdeer/syncthing4swarm`-docker image, please switch to `syncthing4swarm/syncthing4swarm`-docker image. (My pull request repository was merged into the main repository 😄)
->
-> 1. Update the `syncthing4swarm.yaml` file inside the `SwarmPilot` folder. 
-> 
->    Replace the the line `image: suitdeer/syncthing4swarm:latest` 
-> 
->    with `image: syncthing4swarm/syncthing4swarm:latest`
-> 2. Update the syncthing4swarm docker service:
-> 
->    ```bash
->    cd SwarmPilot
->    sudo docker stack deploy --resolve-image=always -c syncthing4swarm.yaml syncthing4swarm
->    ```
-
-> For all that are new (after 07.03.2026) you do not need to do anything 😄
+# SwarmPilot
 
 <p align="center">
   <img src="pictures/spaceship.svg" alt="cargo spaceship" width="300">
@@ -23,7 +7,7 @@
 <p align="center"><b>Deploy your Swarm cluster with one script — automatically
 </b></p>
 
-SwarmPilot helps you to deploy a high available docker swarm cluster from 1 to 9 nodes with the following components:
+SwarmPilot helps you deploy a highly available Docker Swarm cluster from 1 to 9 nodes with the following components:
 
 ## Components
 
@@ -61,7 +45,8 @@ Dashboard authentication: Basic Auth (username and password are requested during
 - SSH access on all nodes
 - Root access on all nodes
 - Additional unused IP address for keepalived (virtual IP of the docker swarm cluster)
-- `sshpass` must be installed on all nodes: `sudo apt install sshpass`
+- `sshpass` must be installed on all nodes (required automatic access via ssh password to configure other nodes): `sudo apt install sshpass`
+- `sshpass` must be installed on all nodes (required for rootless mode certificates and Traefik dashboard password hash generation): `sudo apt install openssl` 
 
 ## Quick Start
 
@@ -76,6 +61,81 @@ cd SwarmPilot
 sudo chmod +x swarmpilot.sh
 sudo ./swarmpilot.sh
 ```
+
+## Rootless Mode (User Namespace Mode)
+
+SwarmPilot supports two installation modes:
+
+- **Normal mode (default)**: Docker socket access via `/var/run/docker.sock`
+- **Rootless mode** option (`Y` at prompt): user namespace remapping with TLS-secured Docker API access for management containers (more secure if container breakout happens)
+
+When the script starts, you can choose:
+
+```text
+Install Docker Swarm in rootless mode (Y/[N]):
+```
+
+### What is different in rootless mode?
+
+| Area                              | Normal mode                                                | Rootless mode option                                                                 |
+| --------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Docker daemon setup               | Standard Docker service                                    | Docker configured with `"userns-remap": "default"`                                   |
+| Container-to-Docker communication | `docker.sock` bind mount                                   | TLS endpoint `https://host.docker.internal:2376`                                     |
+| Certificates                      | Not required for Docker API access                         | Script generates CA, server, and client certificates                                 |
+| Node preparation                  | Standard package and Docker install                        | Certificates are copied to all nodes and permissions are hardened                    |
+| Swarm secrets                     | Not required for Docker API TLS                            | Creates `client-cert.pem`, `client-key.pem`, and `ca-cert.pem` secrets               |
+| Syncthing data permissions        | Standard host ownership `root` `0:0`                       | Ownership adjusted to UID/GID `dockremap` `100000:100000`                            |
+| Portainer agent/backend           | Uses `unix:///var/run/docker.sock` via docker volume mount | Uses provided docker socket endpoints of host(s) `https://host.docker.internal:2376` |
+| Traefik provider                  | Uses `unix:///var/run/docker.sock` via docker volume mount | Uses provided docker socket endpoints of host(s) `https://host.docker.internal:2376` |
+
+### Important behavior changes
+
+- The script still runs as root, but containers operate with user namespace remapping (no root rights on host).
+- For rootless mode, direct host `docker.sock` mounting is not possible because file ownership is `root` but containers are running under `dockremap`-user (has no root rights).
+- The script adds `host.docker.internal` to `/etc/hosts` and exposes the Docker API on `172.17.0.1:2376` with TLS verification so that docker containers can nevertheless access the docker socket via a secured TLS connection.
+
+### Rootless TLS Certificates: What They Are and Why They Are Needed
+
+In rootless mode, management containers (for example Portainer agent or Traefik) cannot reliably use a direct `/var/run/docker.sock` bind mount, because Docker runs with user namespace remapping (`dockremap`).
+
+To solve this, SwarmPilot exposes the Docker API on a TLS-protected endpoint:
+`https://host.docker.internal:2376`
+
+For this secure connection, the script creates and uses three certificate pairs:
+
+1. `ca-key.pem` and `ca-cert.pem`
+     - Purpose: This is your local Certificate Authority (CA).
+     - Why: The CA signs server and client certificates so both sides can trust them.
+
+2. `server-key.pem` and `server-cert.pem`
+     - Purpose: Identity of the Docker API server on each node.
+     - Why: Containers must verify they are talking to the real Docker daemon endpoint.
+
+3. `client-key.pem` and `client-cert.pem`
+     - Purpose: Identity of the client (container/service) connecting to the Docker API.
+     - Why: The Docker API only accepts clients with a valid CA-signed client certificate (mutual TLS).
+
+How this is used during setup:
+
+- SwarmPilot generates the CA, server, and client certificates on the local node (where the script is running).
+- It copies certificate files to remote nodes.
+- It configures Docker daemon TLS flags (`--tlsverify`, `--tlscacert`, `--tlscert`, `--tlskey`).
+- It creates Swarm secrets:
+  - `client-cert.pem`
+  - `client-key.pem`
+  - `ca-cert.pem`
+- Portainer and Traefik consume those secrets to authenticate to Docker API over HTTPS.
+
+Security benefit:
+
+- Without client certificates, access to Docker API is denied.
+- Without server certificate validation, clients would not know if the endpoint is trusted.
+- This gives encrypted transport and strong mutual authentication between services and Docker daemon.
+
+### Recommendation
+
+- Use **normal mode** if you need the simplest setup **but if a container breakout happens the attacker as automaticly root rights on host system**.
+- Use **rootless mode** if you want stronger isolation via user namespace remapping. If a container breakout happens the attacker as **not root rights** on host system.
 
 ## Setup Video
 
@@ -94,11 +154,23 @@ Please use the `reverse_proxy` overlay network for your stacks if you need ssl t
 
 Example:
 
-If your stack containers need persistent volumes please first create the root directory in the syced syncthind directory:
+If your stack containers need persistent volumes please first create a directory in the data folder inside the syncthing directory:
 
 ```bash
 sudo mkdir /var/syncthing/data/<FOLDER_NAME>
 ```
+
+If rootless mode was selected during installation, also apply ownership mapping for the new directory:
+
+```bash
+sudo chown -R 100000:100000 /var/syncthing/data/<FOLDER_NAME>
+```
+
+Why this is needed:
+
+- In rootless mode, containers run with user namespace remapping (`dockremap`).
+- Container UID/GID `0:0` maps to host UID/GID `100000:100000`.
+- Without this `chown`, containers may not be able to write to the new persistent volume directory.
 
 ### Nginx Proxy Manager
 
@@ -230,11 +302,18 @@ The [`swarmpilot.sh`](swarmpilot.sh) script automates the entire cluster setup p
 - Installs Docker Engine, CLI, containerd.io, and Docker plugins
 - Enables and starts Docker service
 - Validates installation with hello-world test
+- If rootless mode is selected:
+  - Configures Docker with `"userns-remap": "default"`
+  - Generates CA/server/client certificates for Docker API TLS
+  - Publishes TLS-secured Docker API at `https://host.docker.internal:2376`
+  - Copies TLS certificates to remote nodes
 
 ### Step 4: Docker Swarm Initialization
 - Initializes Docker Swarm on the local node with the specified advertise address
 - Retrieves the manager join token
 - Joins all remote nodes to the swarm using the join token
+- If rootless mode is selected:
+  - Creates Docker secrets for `client-cert.pem`, `client-key.pem`, and `ca-cert.pem`
 
 ### Step 5: Keepalived Configuration (for clusters > 1 node)
 - Prompts for virtual IP address for the cluster
@@ -259,6 +338,8 @@ The [`swarmpilot.sh`](swarmpilot.sh) script automates the entire cluster setup p
 - Deploys Portainer stack
 - Exposes Portainer on ports 9443 (HTTPS) and 8000 (HTTP)
 - Publishes the Portainer dashboard at `https://<virtual_ip>:9443`
+- If rootless mode is selected:
+  - Portainer is configured to use TLS-secured Docker API access instead of `docker.sock` bind mounts
 
 ### Step 8: Reverse Proxy Selection and Installation
 
@@ -271,6 +352,8 @@ The [`swarmpilot.sh`](swarmpilot.sh) script automates the entire cluster setup p
   - Creates `traefik.yaml` and deploys the Traefik stack
   - Exposes ports 80 (HTTP) and 443 (HTTPS)
   - Publishes the Traefik dashboard at `https://<virtual_ip>/dashboard/` (protected by Basic Auth)
+  - If rootless mode is selected:
+    - Traefik uses TLS-secured Swarm provider endpoint and Docker cert secrets
 - If `Nginx Proxy Manager` is selected, the script:
   - Creates required Nginx Proxy Manager data directories
   - Creates the shared overlay network `reverse_proxy` (if needed)

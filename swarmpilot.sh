@@ -63,6 +63,15 @@ validate_node_count() {
     [[ "$count" =~ ^[1-9]$ ]] && [[ "$count" -lt 10 ]]
 }
 
+# Function to validate Y/N input (empty input defaults to N)
+validate_yes_no() {
+    local input="$1"
+    # Empty input is treated as 'N' (default)
+    [[ -z "$input" || "$input" =~ ^[Y]$ ]] && return 0
+    [[ "$input" =~ ^[N]$ ]] && return 0
+    return 1
+}
+
 # Function to validate IP address
 validate_ip() {
     local ip="$1"
@@ -128,8 +137,8 @@ remote_exec_sudo_with_stdin() {
     } | sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "sudo -S -p '' bash -lc $quoted_command"
 }
 
-# Function to check if sshpass is installed on a node
-check_sshpass_installed() {
+# Function to check if required tools are installed on a node
+check_req_packages_installed() {
     local node_ip="$1"
     local username="$2"
     local password="$3"
@@ -141,13 +150,23 @@ check_sshpass_installed() {
             log_error "sshpass is not installed on local node"
             return 1
         fi
+        if ! command -v openssl >/dev/null 2>&1; then
+            log_error "openssl is not installed on local node"
+            return 1
+        fi
         log_success "sshpass is installed on local node"
+        log_success "openssl is installed on local node"
     else
         if ! sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "command -v sshpass >/dev/null 2>&1"; then
             log_error "sshpass is not installed on $node_name"
             return 1
         fi
+        if ! sshpass -p "$password" ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$username@$node_ip" "command -v openssl >/dev/null 2>&1"; then
+            log_error "openssl is not installed on $node_name"
+            return 1
+        fi
         log_success "sshpass is installed on $node_name"
+        log_success "openssl is installed on $node_name"
     fi
 
     return 0
@@ -291,6 +310,8 @@ install_syncthing4swarm() {
     local node_name="$4"
     local is_local="${5:-false}"
 
+    local create_dir_cmd
+
     if [ "$is_local" = true ]; then
         log_info "Installing syncthing4swarm on local node..."
     else
@@ -298,22 +319,39 @@ install_syncthing4swarm() {
     fi
 
     # Create /var/syncthing/data directory on all nodes
-    local create_dir_cmd="sudo mkdir -p /var/syncthing/data"
-    if [ "$is_local" = true ]; then
-        if ! eval "$create_dir_cmd"; then
-            log_error "Failed to create /var/syncthing/data on local node"
-            return 1
+    if [ "$ROOTLESS_MODE" = "Y" ]; then
+        create_dir_cmd="sudo mkdir -p /var/syncthing/data && sudo chown -R 100000:100000 /var/syncthing"
+        
+        if [ "$is_local" = true ]; then
+            if ! eval "$create_dir_cmd"; then
+                log_error "Failed to create /var/syncthing/data on local node"
+                return 1
+            fi
+        else
+            if ! remote_exec_sudo "$node_ip" "$username" "$password" "$create_dir_cmd"; then
+                log_error "Failed to create /var/syncthing/data on node $node_name"
+                return 1
+            fi
         fi
     else
-        if ! remote_exec_sudo "$node_ip" "$username" "$password" "$create_dir_cmd"; then
-            log_error "Failed to create /var/syncthing/data on node $node_name"
-            return 1
+        create_dir_cmd="sudo mkdir -p /var/syncthing/data"
+
+        if [ "$is_local" = true ]; then
+            if ! eval "$create_dir_cmd"; then
+                log_error "Failed to create /var/syncthing/data on local node"
+                return 1
+            fi
+        else
+            if ! remote_exec_sudo "$node_ip" "$username" "$password" "$create_dir_cmd"; then
+                log_error "Failed to create /var/syncthing/data on node $node_name"
+                return 1
+            fi
         fi
     fi
 
     sleep 3
 
-    # On local node only: clone repository and deploy docker stack
+    # On local node only: create configuration and deploy Docker stack
     if [ "$is_local" = true ]; then
 
         # Create syncthing4swarm.yaml configuration file
@@ -400,14 +438,106 @@ install_portainer() {
     log_info "Installing Portainer on local node..."
 
     # Create portainer data directory
-    if ! sudo mkdir -p /var/syncthing/data/portainer; then
-        log_error "Failed to create portainer data directory"
-        return 1
+    if [ "$ROOTLESS_MODE" = "Y" ]; then
+        create_dir_cmd="sudo mkdir -p /var/syncthing/data/portainer && sudo chown 100000:100000 /var/syncthing/data/portainer"
+        if ! eval "$create_dir_cmd"; then
+            log_error "Failed to create portainer data directory"
+            return 1
+        fi
+    else
+        create_dir_cmd="sudo mkdir -p /var/syncthing/data/portainer"
+        if ! eval "$create_dir_cmd"; then
+            log_error "Failed to create portainer data directory"
+            return 1
+        fi
     fi
 
     # Create portainer.yaml configuration file
     log_info "Creating portainer configuration file..."
-    if ! tee "$SCRIPT_DIR/portainer.yaml" >/dev/null <<EOF
+
+    if [ "$ROOTLESS_MODE" = "Y" ]; then
+        if ! tee "$SCRIPT_DIR/portainer.yaml" >/dev/null <<EOF
+services:
+  agent:
+    image: portainer/agent:lts
+    volumes:
+      - /var/lib/docker/100000.100000/volumes:/var/lib/docker/volumes
+    networks:
+      - agent_network
+    secrets:
+      - source: client-cert.pem
+        target: cert.pem
+      - source: client-key.pem
+        target: key.pem
+      - source: ca-cert.pem
+        target: ca.pem
+    environment:
+      - "DOCKER_HOST=https://host.docker.internal:2376"
+      - "DOCKER_TLS_VERIFY=1"
+      - "DOCKER_CERT_PATH=/run/secrets"
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    deploy:
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      mode: global
+      placement:
+        constraints: [node.platform.os == linux]
+
+  portainer:
+    image: portainer/portainer-ce:lts
+    command: -H tcp://host.docker.internal:2376 --tlsverify --tlscacert /run/secrets/ca.pem --tlscert /run/secrets/cert.pem --tlskey /run/secrets/key.pem
+    ports:
+      - "9443:9443"
+      - "8000:8000"
+    volumes:
+      - /var/syncthing/data/portainer:/data
+    networks:
+      - agent_network
+    secrets:
+      - source: client-cert.pem
+        target: cert.pem
+      - source: client-key.pem
+        target: key.pem
+      - source: ca-cert.pem
+        target: ca.pem
+    environment:
+      - "DOCKER_HOST=https://host.docker.internal:2376"
+      - "DOCKER_TLS_VERIFY=1"
+      - "DOCKER_CERT_PATH=/run/secrets"
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    deploy:
+      restart_policy:
+        condition: any
+        delay: 60s
+        max_attempts: 3
+        window: 180s
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+networks:
+  agent_network:
+    driver: overlay
+    attachable: true
+secrets:
+  client-cert.pem:
+    external: true
+  client-key.pem:
+    external: true
+  ca-cert.pem:
+    external: true
+EOF
+        then
+            log_error "Failed to create portainer configuration file"
+            return 1
+        fi
+    else
+        if ! tee "$SCRIPT_DIR/portainer.yaml" >/dev/null <<EOF
 services:
   agent:
     image: portainer/agent:lts
@@ -451,9 +581,10 @@ networks:
     driver: overlay
     attachable: true
 EOF
-    then
-        log_error "Failed to create portainer configuration file"
-        return 1
+        then
+            log_error "Failed to create portainer configuration file"
+            return 1
+        fi
     fi
 
     # Deploy portainer stack
@@ -472,14 +603,28 @@ install_nginxproxymanager() {
     log_info "Installing Nginx Proxy Manager on local node..."
 
     # Create directories with error handling
-    if ! sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_data >/dev/null 2>&1; then
-        log_error "Failed to create Nginx Proxy Manager data directory: $npm_data_dir"
-        return 1
-    fi
-
-    if ! sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_letsencrypt >/dev/null 2>&1; then
-        log_error "Failed to create Nginx Proxy Manager letsencrypt directory: $npm_letsencrypt_dir"
-        return 1
+    if [ "$ROOTLESS_MODE" = "Y" ]; then
+        create_dir_cmd="sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_data && sudo chown -R 100000:100000 /var/syncthing/data/nginxproxymanager"
+        if ! eval "$create_dir_cmd"; then
+            log_error "Failed to create Nginx Proxy Manager data directory"
+            return 1
+        fi
+        create_dir_cmd="sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_letsencrypt && sudo -R chown 100000:100000 /var/syncthing/data/nginxproxymanager"
+        if ! eval "$create_dir_cmd"; then
+            log_error "Failed to create Nginx Proxy Manager letsencrypt directory"
+            return 1
+        fi
+    else
+        create_dir_cmd="sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_data"
+        if ! eval "$create_dir_cmd"; then
+            log_error "Failed to create Nginx Proxy Manager data directory"
+            return 1
+        fi
+        create_dir_cmd="sudo mkdir -p /var/syncthing/data/nginxproxymanager/npm_letsencrypt"
+        if ! eval "$create_dir_cmd"; then
+            log_error "Failed to create Nginx Proxy Manager letsencrypt directory"
+            return 1
+        fi
     fi
 
     # Create Nginx Proxy Manager docker network
@@ -487,7 +632,7 @@ install_nginxproxymanager() {
         log_error "Failed to create Nginx Proxy Manager docker network (reverse_proxy)"
         return 1
     else
-        log_success "Created a overlay Network 'reverse_proxy' for Nginx Proxy Manager and other docker stacks to be used"
+        log_success "Created an overlay network 'reverse_proxy' for Nginx Proxy Manager and other Docker stacks"
     fi
 
     # Create nginxproxymanager.yaml configuration file
@@ -535,9 +680,18 @@ install_traefik() {
     log_info "Installing Traefik on local node..."
 
     # Create directories with error handling
-    if ! sudo mkdir -p /var/syncthing/data/traefik/letsencrypt >/dev/null 2>&1; then
-        log_error "Failed to create Traefik letsencrypt directory"
-        return 1
+    if [ "$ROOTLESS_MODE" = "Y" ]; then
+        create_dir_cmd="sudo mkdir -p /var/syncthing/data/traefik/letsencrypt && sudo chown -R 100000:100000 /var/syncthing/data/traefik"
+        if ! eval "$create_dir_cmd"; then
+            log_error "Failed to create Traefik letsencrypt directory"
+            return 1
+        fi
+    else
+        create_dir_cmd="sudo mkdir -p /var/syncthing/data/traefik/letsencrypt"
+        if ! eval "$create_dir_cmd"; then
+            log_error "Failed to create Traefik letsencrypt directory"
+            return 1
+        fi
     fi
 
     # Create Traefik docker network
@@ -545,24 +699,120 @@ install_traefik() {
         log_error "Failed to create Traefik docker network (reverse_proxy)"
         return 1
     else
-        log_success "Created a overlay Network 'reverse_proxy' for Traefik and other docker stacks to be used"
+        log_success "Created an overlay network 'reverse_proxy' for Traefik and other Docker stacks"
     fi
 
     # Create traefik.yaml configuration file
     log_info "Creating Traefik configuration file..."
-    if ! tee "$SCRIPT_DIR/traefik.yaml" >/dev/null <<EOF
+    if [ "$ROOTLESS_MODE" = "Y" ]; then
+        if ! tee "$SCRIPT_DIR/traefik.yaml" >/dev/null <<EOF
 services:
   traefik:
     image: traefik:v3
     command:
       # API & Dashboard
       - "--api.dashboard=true" # Enable the dashboard
-      - "--api.insecure=false" # Explicitly disable insecure API mod
+      - "--api.insecure=false" # Explicitly disable insecure API mode
+      # Enable Docker Swarm provider
+      - "--providers.swarm.tls.ca=/run/secrets/ca.pem"
+      - "--providers.swarm.tls.cert=/run/secrets/cert.pem"
+      - "--providers.swarm.tls.key=/run/secrets/key.pem"
+      - "--providers.swarm.endpoint=https://host.docker.internal:2376"
+      # Watch for Swarm service changes (requires socket access)
+      - "--providers.swarm.watch=true"
+      # Recommended: Do not expose services by default; require explicit labels
+      - "--providers.swarm.exposedbydefault=false"
+      # Specify the default network for Traefik to connect to services
+      - "--providers.swarm.network=reverse_proxy"
+      # Define entrypoints
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.websecure.http.tls=true"
+      # Redirect HTTP to HTTPS
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+      # Lets Encrypt configuration
+      - "--certificatesresolvers.letsencrypt.acme.email=${acme_email}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      # Logging
+      - "--log.level=WARN"
+      - "--accesslog=true"
+    ports:
+      # Publish ports in host mode for direct access
+      - target: 80
+        published: 80
+        protocol: tcp
+      - target: 443
+        published: 443
+        protocol: tcp
+    volumes:
+      # Docker socket for service discovery
+      # Persistent storage for certificates
+      - /var/syncthing/data/traefik/letsencrypt:/letsencrypt
+    networks:
+      - reverse_proxy
+    secrets:
+      - source: client-cert.pem
+        target: cert.pem
+      - source: client-key.pem
+        target: key.pem
+      - source: ca-cert.pem
+        target: ca.pem
+    environment:
+      - "DOCKER_HOST=https://host.docker.internal:2376"
+      - "DOCKER_TLS_VERIFY=1"
+      - "DOCKER_CERT_PATH=/run/secrets"
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - "traefik.enable=true"
+        # Dashboard router
+        - "traefik.http.routers.dashboard.rule=PathPrefix(\`/dashboard\`) || PathPrefix(\`/api\`)"
+        - "traefik.http.routers.dashboard.entrypoints=websecure"
+        - "traefik.http.routers.dashboard.service=api@internal"
+        - "traefik.http.routers.dashboard.tls=true"
+        # Basicauth middleware
+        - "traefik.http.middlewares.dashboard-auth.basicauth.users=${dashboard_auth_user}:{SHA}${dashboard_auth_sha1}"
+        - "traefik.http.routers.dashboard.middlewares=dashboard-auth@swarm"
+        # Service hint
+        - "traefik.http.services.traefik.loadbalancer.server.port=8080"
+networks:
+  reverse_proxy:
+    external: true
+secrets:
+  client-cert.pem:
+    external: true
+  client-key.pem:
+    external: true
+  ca-cert.pem:
+    external: true
+EOF
+        then
+            log_error "Failed to create Traefik configuration file"
+            return 1
+        fi
+    else
+        if ! tee "$SCRIPT_DIR/traefik.yaml" >/dev/null <<EOF
+services:
+  traefik:
+    image: traefik:v3
+    command:
+      # API & Dashboard
+      - "--api.dashboard=true" # Enable the dashboard
+      - "--api.insecure=false" # Explicitly disable insecure API mode
       # Enable Docker Swarm provider
       - "--providers.swarm.endpoint=unix:///var/run/docker.sock"
       # Watch for Swarm service changes (requires socket access)
-      - "--providers.swarm.watch=true"
-      # Recommended: Dont expose services by default require explicit labels
+      - "--providers.swarm.watch=true"      
+      # Recommended: Do not expose services by default; require explicit labels
       - "--providers.swarm.exposedbydefault=false"
       # Specify the default network for Traefik to connect to services
       - "--providers.swarm.network=reverse_proxy"
@@ -618,9 +868,10 @@ networks:
   reverse_proxy:
     external: true
 EOF
-    then
-        log_error "Failed to create Traefik configuration file"
-        return 1
+        then
+            log_error "Failed to create Traefik configuration file"
+            return 1
+        fi
     fi
 
     # Deploy Traefik stack
@@ -634,6 +885,8 @@ EOF
     return 0
 }
 
+
+
 # Function to install Docker on a node (local or remote)
 install_docker() {
     local node_ip="$1"
@@ -642,31 +895,244 @@ install_docker() {
     local node_name="$4"
     local is_local="${5:-false}"
 
-    if [ "$is_local" = true ]; then
-        log_info "Installing Docker on local node..."
-    else
-        log_info "Installing Docker on node $node_name..."
+    local docker_commands
+
+    # On local node and rootless mode was picked
+    if [ "$is_local" = true ] && [ "$ROOTLESS_MODE" = "Y" ]; then
+        log_info "You have chosen rootless mode installation.\n       Because of this, we need to perform additional steps. In rootless mode, access to the docker.sock\n       file through a container volume mount is not possible (insufficient permissions),\n       so we need to publish the Docker socket over a secure web endpoint (HTTPS).\n       To do this, we need to create a CA certificate and generate a server certificate (signed by the CA)\n       and a client certificate (also signed by the CA).\n       This ensures the Docker socket can only be accessed if the client container presents the client certificate\n       (verifying the connection to the host server)."
+        log_info "1. Generate CA-key (used for signing CA-certificate itself, for signing server-certificate and client-certificate)"
+
+        CA_KEY_PASSWORD=$(get_password "Enter password for your CA key: ")
+        while ! validate_password "$NODE_PASSWORD"; do
+            log_error "Password must be 8-128 characters"
+            CA_KEY_PASSWORD=$(get_password "Enter password for your CA key: ")
+        done
+
+        openssl genrsa -aes256 -passout pass:$CA_KEY_PASSWORD -out /ca-key.pem 4096
+        log_success "Successfully created /ca-key.pem"
+        echo -e "${BLUE}"
+        echo "╔╔╔══[#] ca-key"
+        echo -e "${NC}"
+        echo ""
+        sleep 4
+
+
+        log_info "2. Generate CA-certificate and sign with CA-key"
+        openssl req -new -x509 -days 365000 -key /ca-key.pem -sha256 -passin pass:$CA_KEY_PASSWORD -out /ca-cert.pem -subj "/C=AA/ST=NRW/L=Muenster/O=dockerswarm/OU=IT/CN=host.docker.internal/emailAddress=test@example.com"
+        log_success "Successfully generated /ca-cert.pem and signed with CA-key"
+        echo -e "${BLUE}"
+        echo "╔═══════════╗"
+        echo "║  ca-cert ╔╔╔══[#] ca-key"
+        echo "╚═══════════╝"
+        echo -e "${NC}"
+        echo ""
+        sleep 4
+
+        log_info "3. Create a server-key and a certificate signing request (CSR) (/server.csr)"
+        openssl genrsa -out /server-key.pem 4096
+        openssl req -subj "/CN=host.docker.internal" -sha256 -new -key /server-key.pem -out /server.csr
+        log_success "Successfully generated /server-key.pem and /server.csr (certificate signing request)"
+        echo -e "${BLUE}"
+        echo "╔═══════════════╗"
+        echo "║ ? server.csr  ║"
+        echo "║   ╔╔╔══[#]   ╔╔╔══[#] ca-key"
+        echo "║   server-key  ║"
+        echo "╚═══════════════╝"
+        echo -e "${NC}"
+        echo ""
+        sleep 4
+
+        log_info "4. Generate the server certificate using the previously generated certificate signing request (CSR) (/server.csr).\n       The CSR is sent to the CA certificate. It generates the server certificate in the certificate chain, and it is signed with the CA key."
+        tee /extfile.cnf >/dev/null <<EOF
+subjectAltName = DNS:host.docker.internal,IP:172.17.0.1
+extendedKeyUsage = serverAuth
+EOF
+        openssl x509 -req -days 365000 -sha256 -passin pass:$CA_KEY_PASSWORD -in /server.csr -CA /ca-cert.pem -CAkey /ca-key.pem -CAcreateserial -out /server-cert.pem -extfile /extfile.cnf
+        rm /extfile.cnf
+        rm /server.csr
+        log_success "Successfully generated /server-cert.pem"
+        echo -e "${BLUE}"
+        echo "╔═══════════════╗"
+        echo "║ ? server.csr  ║                       ╔═══════════╗"
+        echo "║   ╔╔╔══[#]   ╔╔╔══[#] ca-key   --->   ║  ca-cert ╔╔╔══[#] ca-key"
+        echo "║   server-key  ║                       ╚═══════════╝"
+        echo "╚═══════════════╝                             |" 
+        echo "                                              V"
+        echo "                                      ╔═══════════════╗"
+        echo "                                      ║  server-cert ╔╔╔══[#] server-key"
+        echo "                                      ╚═══════════════╝"
+        echo -e "${NC}"
+        echo ""
+        sleep 4
+
+        log_info "5. Create a client-key and certificate signing request (CSR) (/client.csr)"
+        openssl genrsa -out /client-key.pem 4096
+        openssl req -subj "/CN=client" -sha256 -new -key /client-key.pem -out /client.csr
+        log_success "Successfully generated /client-key.pem and /client.csr (certificate signing request)"
+        echo -e "${BLUE}"
+        echo "╔═══════════════╗"
+        echo "║ ? client.csr  ║"
+        echo "║   ╔╔╔══[#]   ╔╔╔══[#] ca-key"
+        echo "║   client-key  ║"
+        echo "╚═══════════════╝"
+        echo -e "${NC}"
+        echo ""
+        sleep 4
+
+        log_info "6. Generate the client certificate using the previously generated certificate signing request (CSR) (/client.csr).\n       The CSR is sent to the CA certificate. It generates the client certificate in the certificate chain, and it is signed with the CA key."
+        tee /extfile.cnf >/dev/null <<EOF
+extendedKeyUsage = clientAuth
+EOF
+        openssl x509 -req -days 365000 -sha256 -passin pass:$CA_KEY_PASSWORD -in /client.csr -CA /ca-cert.pem -CAkey /ca-key.pem -CAcreateserial -out /client-cert.pem -extfile /extfile.cnf
+        rm /extfile.cnf
+        rm /client.csr
+        log_success "Successfully generated /client-cert.pem"
+        echo -e "${BLUE}"
+        echo "╔═══════════════╗"
+        echo "║ ? client.csr  ║                       ╔═══════════╗"
+        echo "║   ╔╔╔══[#]   ╔╔╔══[#] ca-key   --->   ║  ca-cert ╔╔╔══[#] ca-key"
+        echo "║   client-key  ║                       ╚═══════════╝"
+        echo "╚═══════════════╝                             |" 
+        echo "                                              V"
+        echo "                                      ╔═══════════════╗"
+        echo "                                      ║  client-cert ╔╔╔══[#] client-key"
+        echo "                                      ╚═══════════════╝"
+        echo -e "${NC}"
+        echo ""
+        sleep 4
+
+        log_success "ALL CERTIFICATES ARE SUCCESSFULLY GENERATED"
+        echo -e "${BLUE}"
+        echo "                     ╔═══════════╗"
+        echo "                     ║  ca-cert ╔╔╔══[#] ca-key"
+        echo "                     ╚═══════════╝"
+        echo "         ____________/           \____________" 
+        echo "        V                                     V"
+        echo "╔═══════════════╗                     ╔═══════════════╗"
+        echo "║  client-cert ╔╔╔══[#] client-key    ║  client-cert ╔╔╔══[#] client-key"
+        echo "╚═══════════════╝                     ╚═══════════════╝"
+        echo -e "${NC}"
+        echo ""
+        chmod 0400 /ca-key.pem /client-key.pem /server-key.pem
+        chmod 0444 /ca-cert.pem /server-cert.pem /client-cert.pem
+        sleep 4
     fi
 
-    # Docker installation commands
-    local docker_commands=(
-        "sudo apt -q update >/dev/null 2>&1"
-        "sudo apt install -y -q ca-certificates curl >/dev/null 2>&1"
-        "sudo install -m 0755 -d /etc/apt/keyrings"
-        "sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc"
-        "sudo chmod a+r /etc/apt/keyrings/docker.asc"
-        "sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
+
+
+    if [ "$ROOTLESS_MODE" = "Y" ]; then
+
+        # Docker installation commands
+        docker_commands=(
+            "sudo tee -a /etc/hosts >/dev/null <<EOF
+172.17.0.1 host.docker.internal
+EOF"
+            "sudo mkdir /etc/docker"
+            "sudo tee /etc/docker/daemon.json >/dev/null <<EOF
+{
+  \"userns-remap\": \"default\"
+}
+EOF"
+            "sudo chmod 0400 /ca-key.pem /client-key.pem /server-key.pem"
+            "sudo chmod 0444 /ca-cert.pem /server-cert.pem /client-cert.pem"
+            "sudo apt -q update >/dev/null 2>&1"
+            "sudo apt install -y -q ca-certificates curl >/dev/null 2>&1"
+            "sudo install -m 0755 -d /etc/apt/keyrings"
+            "sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc"
+            "sudo chmod a+r /etc/apt/keyrings/docker.asc"
+            "sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
 Types: deb
 URIs: https://download.docker.com/linux/ubuntu
 Suites: \$(. /etc/os-release && echo "\${UBUNTU_CODENAME:-\$VERSION_CODENAME}")
 Components: stable
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF"
-        "sudo apt -q update >/dev/null 2>&1"
-        "sudo apt install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null 2>&1"
-        "sudo systemctl enable docker >/dev/null 2>&1"
-        "sudo systemctl start docker >/dev/null 2>&1"
-    )
+            "sudo apt -q update >/dev/null 2>&1"
+            "sudo apt install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null 2>&1"
+            "sudo systemctl enable docker >/dev/null 2>&1"
+            "sudo systemctl start docker >/dev/null 2>&1"
+            "sleep 5"
+            "sudo mkdir -p /etc/systemd/system/docker.service.d"
+            "sudo tee /etc/systemd/system/docker.service.d/override.conf > /dev/null <<EOF
+[Service]
+ExecStart=
+ExecStart=/usr/bin/dockerd -H fd:// --tlsverify --tlscacert=/ca-cert.pem --tlscert=/server-cert.pem --tlskey=/server-key.pem -H 172.17.0.1:2376
+EOF"
+            "sudo systemctl daemon-reload >/dev/null 2>&1"
+            "sleep 2"
+            "sudo systemctl restart docker.service >/dev/null 2>&1"
+        )
+    else
+        # Docker installation commands
+        docker_commands=(
+            "sudo apt -q update >/dev/null 2>&1"
+            "sudo apt install -y -q ca-certificates curl >/dev/null 2>&1"
+            "sudo install -m 0755 -d /etc/apt/keyrings"
+            "sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc"
+            "sudo chmod a+r /etc/apt/keyrings/docker.asc"
+            "sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: \$(. /etc/os-release && echo "\${UBUNTU_CODENAME:-\$VERSION_CODENAME}")
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF"
+            "sudo apt -q update >/dev/null 2>&1"
+            "sudo apt install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null 2>&1"
+            "sudo systemctl enable docker >/dev/null 2>&1"
+            "sudo systemctl start docker >/dev/null 2>&1"
+        )
+    fi
+
+
+
+    if [ "$is_local" = true ]; then
+        log_info "Installing Docker on local node...(can take up to a minute)"
+    else
+        echo ""
+        if [ "$ROOTLESS_MODE" = "Y" ]; then
+            log_info "Copying /ca-cert.pem /ca-key.pem\n       /server-cert.pem /server-key.pem\n       /client-cert.pem /client-key.pem to node $node_ip"
+            content=$(cat /ca-cert.pem)
+            if ! remote_exec_sudo_with_stdin "$node_ip" "$username" "$password" "tee /ca-cert.pem >/dev/null 2>&1" "$content"; then
+                log_error "Failed to write /ca-cert.pem on node $node_name"
+                return 1
+            fi
+
+            content=$(cat /ca-key.pem)
+            if ! remote_exec_sudo_with_stdin "$node_ip" "$username" "$password" "tee /ca-key.pem >/dev/null 2>&1" "$content"; then
+                log_error "Failed to write /ca-key.pem on node $node_name"
+                return 1
+            fi
+
+            content=$(cat /server-cert.pem)
+            if ! remote_exec_sudo_with_stdin "$node_ip" "$username" "$password" "tee /server-cert.pem >/dev/null 2>&1" "$content"; then
+                log_error "Failed to write /server-cert.pem on node $node_name"
+                return 1
+            fi
+
+            content=$(cat /server-key.pem)
+            if ! remote_exec_sudo_with_stdin "$node_ip" "$username" "$password" "tee /server-key.pem >/dev/null 2>&1" "$content"; then
+                log_error "Failed to write /server-key.pem on node $node_name"
+                return 1
+            fi
+
+            content=$(cat /client-cert.pem)
+            if ! remote_exec_sudo_with_stdin "$node_ip" "$username" "$password" "tee /client-cert.pem >/dev/null 2>&1" "$content"; then
+                log_error "Failed to write /client-cert.pem on node $node_name"
+                return 1
+            fi
+
+            content=$(cat /client-key.pem)
+            if ! remote_exec_sudo_with_stdin "$node_ip" "$username" "$password" "tee /client-key.pem >/dev/null 2>&1" "$content"; then
+                log_error "Failed to write /client-key.pem on node $node_name"
+                return 1
+            fi
+            log_success "Copied /ca-cert.pem /ca-key.pem\n          /server-cert.pem /server-key.pem\n          /client-cert.pem /client-key.pem to node $node_ip"
+        fi
+        log_info "Installing Docker on node $node_name...(can take up to a minute)"
+    fi
+
+
 
     # Execute commands
     for cmd in "${docker_commands[@]}"; do
@@ -704,15 +1170,25 @@ EOF"
     return 0
 }
 
+declare ROOTLESS_MODE
 # Main script execution
 main() {
     display_banner
 
+    if [ "$EUID" -ne 0 ]; then
+        log_error "Error: This script must be run as root to install Docker Engine and related components."
+        exit 1
+    fi
+
+    log_info "Install the Docker Swarm cluster in user namespace mode (rootless mode).\n       Please read README.md for more information."
+    ROOTLESS_MODE=$(get_valid_input "Install Docker Swarm in rootless mode (Y/[N]): " "validate_yes_no \$REPLY")
+    echo ""
+
     local LOCAL_NODE_IP
     log_info "Enter local node IP address (this node)"
     LOCAL_NODE_IP=$(get_valid_input "Local node IP address: " "validate_ip \$REPLY")
-
     echo ""
+
     log_info "How many nodes should the cluster have? (1-9, including this node)"
     NODE_COUNT=$(get_valid_input "Enter number of nodes: " "validate_node_count \$REPLY")
 
@@ -751,17 +1227,17 @@ main() {
     fi
 
     echo ""
-    log_info "Configuration Summary:"
+    log_info "Configuration summary:"
     echo "----------------------"
     echo "Total nodes: $NODE_COUNT"
-    echo "Node 0 (${LOCAL_NODE_IP}) local node"
+    echo "Node 0 (${LOCAL_NODE_IP}) - local node"
     for i in "${!NODE_NAMES[@]}"; do
         echo "${NODE_NAMES[$i]}"
     done
     echo ""
 
     # Confirm installation
-    read -p "Do you want to start the installation? (y/n): " CONFIRM
+    read -p "Do you want to start the installation? (Y/N): " CONFIRM
     if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
         log_info "Installation cancelled by user"
         exit 0
@@ -774,8 +1250,8 @@ main() {
     log_info "Step 2: Running pre-flight checks..."
     log_info "=========================================="
     echo ""
-    if ! check_sshpass_installed "localhost" "$USER" "" "Local Node" true; then
-        log_error "Please install sshpass on local node: sudo apt install -y sshpass"
+    if ! check_req_packages_installed "localhost" "$USER" "" "Local Node" true; then
+        log_error "Please install required tools on local node: sudo apt install -y sshpass openssl"
         exit 1
     fi
 
@@ -783,8 +1259,8 @@ main() {
         IFS=':' read -r NODE_IP NODE_USERNAME NODE_PASSWORD <<< "${NODES[$i]}"
         NODE_NAME="${NODE_NAMES[$i]}"
 
-        if ! check_sshpass_installed "$NODE_IP" "$NODE_USERNAME" "$NODE_PASSWORD" "$NODE_NAME" false; then
-            log_error "Please install sshpass on $NODE_NAME before continuing"
+        if ! check_req_packages_installed "$NODE_IP" "$NODE_USERNAME" "$NODE_PASSWORD" "$NODE_NAME" false; then
+            log_error "Please install required tools on $NODE_NAME before continuing (sshpass and openssl)"
             exit 1
         fi
     done
@@ -815,11 +1291,21 @@ main() {
             exit 1
         fi
     done
-    echo ""
-    log_success "=========================================="
-    log_success "Step 3: Docker installation completed!"
-    log_success "=========================================="
-    echo ""
+    if [ "$ROOTLESS_MODE" = "Y" ]; then
+        echo ""
+        log_success "=========================================="
+        log_success "Step 3: Docker installation completed!"
+        log_success "Test Docker socket access as a container would access it:"
+        log_success "sudo curl --cacert /ca-cert.pem --cert /client-cert.pem --key /client-key.pem https://host.docker.internal:2376/version"
+        log_success "=========================================="
+        echo ""
+    else
+        echo ""
+        log_success "=========================================="
+        log_success "Step 3: Docker installation completed!"
+        log_success "=========================================="
+        echo ""
+    fi
 
 
 
@@ -853,6 +1339,16 @@ main() {
             log_success "$NODE_NAME joined the swarm"
         fi
     done
+
+    # Create Docker secrets for client-cert.pem, client-key.pem, and ca-cert.pem
+    if [ "$ROOTLESS_MODE" = "Y" ]; then    
+        log_info "Creating Docker secrets for /client-cert.pem /client-key.pem /ca-cert.pem"
+        sudo docker secret create client-cert.pem /client-cert.pem
+        sudo docker secret create client-key.pem /client-key.pem
+        sudo docker secret create ca-cert.pem /ca-cert.pem
+        log_success "Created Docker secrets for /client-cert.pem /client-key.pem /ca-cert.pem"
+    fi
+
     echo ""
     log_success "=========================================="
     log_success "Step 4: Docker Swarm initialization completed!"
@@ -934,7 +1430,7 @@ main() {
         done
         echo ""
         log_success "=========================================="
-        log_success "Step 5: Keepalived Configuration completed!"
+        log_success "Step 5: Keepalived configuration completed!"
         log_success "=========================================="
         echo ""
     else
@@ -970,7 +1466,7 @@ main() {
         done
         echo ""
         log_success "=========================================="
-        log_success "Step 6: syncthing4swarm Installation Completed!"
+        log_success "Step 6: syncthing4swarm installation completed!"
         log_success "=========================================="
         echo ""
     else
@@ -1017,7 +1513,7 @@ main() {
     fi
     echo ""
     log_success "=========================================="
-    log_success "Step 7: Portainer Installation Completed!"
+    log_success "Step 7: Portainer installation completed!"
     log_success "        Web interface accessible at"
     log_success "        https://<virtual_ip>:9443"
     log_success "=========================================="
@@ -1033,7 +1529,7 @@ main() {
 
     local reverse_proxy_choice
     while true; do
-        read -r -p "Choose reverse proxy (traefik/nginx proxy manager): " reverse_proxy_choice
+        read -r -p "Choose a reverse proxy traefik=[t] or nginx proxy manager=[n]: " reverse_proxy_choice
         case "${reverse_proxy_choice,,}" in
             traefik|t)
                 reverse_proxy_choice="traefik"
@@ -1044,7 +1540,7 @@ main() {
                 break
                 ;;
             *)
-                log_error "Invalid choice. Please enter 'traefik' or 'nginxproxymanager'."
+                log_error "Invalid choice. Please enter 't' for traefik or 'n' for nginx proxy manager'."
                 ;;
         esac
     done
@@ -1083,7 +1579,7 @@ main() {
 
         echo ""
         log_success "=========================================="
-        log_success "Step 8: Traefik Installation Completed!"
+        log_success "Step 8: Traefik installation completed!"
         log_success "        Web interface accessible at"
         log_success "        https://<virtual_ip>/dashboard/"
         log_success "=========================================="
@@ -1096,7 +1592,7 @@ main() {
         fi
         echo ""
         log_success "=========================================="
-        log_success "Step 8: Nginx Proxy Manager Installation Completed!"
+        log_success "Step 8: Nginx Proxy Manager installation completed!"
         log_success "        Web interface accessible at"
         log_success "        http://<virtual_ip>:81"
         log_success "=========================================="
@@ -1108,7 +1604,7 @@ main() {
     ###### Final summary
     echo ""
     log_success "=========================================="
-    log_success "Docker Cluster Setup Completed Successfully!"
+    log_success "Docker cluster setup completed successfully!"
     log_success "=========================================="
     echo ""
 }
