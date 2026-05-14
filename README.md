@@ -145,7 +145,7 @@ Security benefit:
   Your browser does not support the video tag.  
 </video>
 
-https://github.com/user-attachments/assets/4bd35877-4b11-4a83-b456-ab66db2a5267
+https://github.com/user-attachments/assets/5f0131d1-9ad2-4b57-9ef6-3ef9474fff5d
 
 ## Setup a demo service with lets encrypt certificate on cluster
 
