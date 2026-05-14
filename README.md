@@ -46,7 +46,7 @@ Dashboard authentication: Basic Auth (username and password are requested during
 - Root access on all nodes
 - Additional unused IP address for keepalived (virtual IP of the docker swarm cluster)
 - `sshpass` must be installed on all nodes (required automatic access via ssh password to configure other nodes): `sudo apt install sshpass`
-- `sshpass` must be installed on all nodes (required for rootless mode certificates and Traefik dashboard password hash generation): `sudo apt install openssl` 
+- `openssl` must be installed on all nodes (required for rootless mode certificates and Traefik dashboard password hash generation): `sudo apt install openssl` 
 
 ## Quick Start
 
