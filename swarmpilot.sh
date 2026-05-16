@@ -1315,7 +1315,7 @@ main() {
     log_info "=========================================="
     echo ""
     local SWARM_MANAGER_TOKEN
-    if ! sudo docker swarm init --advertise-addr "$LOCAL_NODE_IP" >/dev/null 2>&1; then
+    if ! sudo docker swarm init --task-history-limit 0 --advertise-addr "$LOCAL_NODE_IP" >/dev/null 2>&1; then
         log_error "Failed to initialize Docker Swarm on local node"
         exit 1
     else
