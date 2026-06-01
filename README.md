@@ -1,3 +1,10 @@
+> ⚠️ **Repo migration**
+
+> This Repo is archived but is now maintained on my own **self hosted** **forgejo instance**
+> 
+> 🔗 **New address**:
+> [https://forgejo.hostlab.tech/suitdeer/SwarmPilot](https://forgejo.hostlab.tech/suitdeer/SwarmPilot)
+
 # SwarmPilot
 
 <p align="center">
