@@ -57,17 +57,11 @@ Dashboard authentication: Basic Auth (username and password are requested during
 
 ## Quick Start
 
-Run only on **one node**:
-
-```bash
-# Clone the repository
-git clone https://github.com/SuitDeer/SwarmPilot.git
-cd SwarmPilot
-
-# Deploy to Swarm
-sudo chmod +x swarmpilot.sh
-sudo ./swarmpilot.sh
-```
+...................................
+> This Repo is archived but is now maintained on my own **self hosted** **forgejo instance**
+> 
+> 🔗 **New address**:
+> [https://forgejo.hostlab.tech/suitdeer/SwarmPilot](https://forgejo.hostlab.tech/suitdeer/SwarmPilot)
 
 ## Rootless Mode (User Namespace Mode)
 
